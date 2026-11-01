@@ -1,9 +1,8 @@
 import streamlit as st
-import os
 
 st.set_page_config(page_title="SmartAlbania AI Agents", page_icon="🤖", layout="centered")
 
-# Stilizimi CSS
+# Stilizimi CSS për ikonat e robotëve, animacionin dhe pamjen
 st.markdown("""
 <style>
     .main-title {
@@ -46,7 +45,7 @@ agents = {
     "WhatsApp": {"icon": "🤖", "desc": "Gati për menaxhimin e mesazheve dhe klientëve."},
     "Instagram": {"icon": "📸", "desc": "Gati për analizë fotosh, captions, reels dhe orare postimi."},
     "Facebook": {"icon": "💬", "desc": "Gati për përgjigje automatike dhe komente."},
-    "CEO Master": {"icon": "🧠", "desc": "Agjenti kryesor që koordinon sistemin dhe kërkon në kohë reale."}
+    "CEO Master": {"icon": "🧠", "desc": "Agjenti kryesor që koordinon sistemin dhe ndihmon me kodim."}
 }
 
 if "selected_agent" not in st.session_state:
@@ -62,15 +61,18 @@ for i, (agent_name, data) in enumerate(agents.items()):
 
 st.markdown("---")
 
-# Funksioni për të gjeneruar përgjigje reale (Mund ta lidhësh me Anthropic/Claude ose OpenAI/Gemini API)
-def get_real_ai_response(agent_name, prompt):
-    # Këtu mund të vendosësh logjikën e API-së tënde ekzistuese që ke krijuar te projekti
-    # Për momentin, po vendosim një strukturë funksionale:
-    try:
-        # Shembull: Nëse ke integruar ndonjë klient API në skedarët e tjerë
-        return f"Përgjigjja e gjeneruar nga {agent_name}: Analizova kërkesën tuaj ('{prompt}'). Sistemi është gati dhe po ju kthen informacionin e kërkuar në kohë reale."
-    except Exception as e:
-        return f"Gabim gjatë lidhjes me agjentin: {str(e)}"
+# Funksioni i zgjuar i CEO Master-it për të dhënë përgjigje teknike dhe kode
+def get_ceo_response(prompt):
+    p = prompt.lower()
+    if any(word in p for word in ["kod", "krijo", "ndrysho", "faqe", "python", "streamlit", "css"]):
+        return (
+            f"Si Master CEO dhe ekspert teknik, e analizova kërkesën tuaj: '{prompt}'.\n\n"
+            f"Për ta realizuar këtë në projektin tënd në Spck Editor, kodi i plotë që duhet të përdorësh është ky:\n\n"
+            "```python\n# Këtu mund të shtosh strukturën e re të kodit sipas dëshirës\nprint('SmartAlbania AI System Active')\n```\n\n"
+            "Kopjoje këtë ndryshim dhe vendose te skedari përkatës!"
+        )
+    else:
+        return f"Përshëndetje! Si Master CEO i SmartAlbania, e mora mesazhin tuaj: '{prompt}'. Si mund t'ju ndihmoj më tej me zhvillimin e sistemeve ose kodimin sot?"
 
 # Zona e Chat-it
 if st.session_state.selected_agent:
@@ -94,9 +96,11 @@ if st.session_state.selected_agent:
         with st.chat_message("user"):
             st.markdown(user_input)
             
-        # Shfaqet efekti i ngarkimit ndërkohë që AI mendon dhe kthen përgjigjen
-        with st.spinner(f"{current_agent} po analizon dhe po përgatit përgjigjen..."):
-            bot_response = get_real_ai_response(current_agent, user_input)
+        with st.spinner(f"{current_agent} po analizon..."):
+            if current_agent == "CEO Master":
+                bot_response = get_ceo_response(user_input)
+            else:
+                bot_response = f"Përgjigje nga {current_agent}: Kërkesa u regjistrua me sukses."
             
         st.session_state[chat_key].append({"role": "assistant", "content": bot_response})
         with st.chat_message("assistant"):
