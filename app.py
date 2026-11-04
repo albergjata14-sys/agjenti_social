@@ -1,109 +1,76 @@
 import streamlit as st
 
-st.set_page_config(page_title="SmartAlbania AI Agents", page_icon="🤖", layout="centered")
+# Konfigurimi i faqes
+st.set_page_config(page_title="Smart Albania - Master CEO AI", page_icon="👔", layout="centered")
 
-# Stilizimi CSS për ikonat e robotëve, animacionin dhe pamjen
-st.markdown("""
-<style>
-    .main-title {
-        font-size: 26px;
-        font-weight: 800;
-        color: #ffffff;
-        margin-bottom: 0px;
-    }
-    .sub-title {
-        font-size: 13px;
-        color: #a0aec0;
-        margin-bottom: 20px;
-    }
-    @keyframes bounce {
-        0%, 100% { transform: translateY(0); }
-        50% { transform: translateY(-6px); }
-    }
-    .stButton>button {
-        border-radius: 14px;
-        padding: 10px;
-        height: auto;
-        transition: all 0.3s ease;
-    }
-    .stButton>button:hover {
-        border-color: #3b82f6;
-        transform: translateY(-2px);
-    }
-</style>
-""", unsafe_allow_html=True)
+st.title("👔 Smart Albania - Master CEO & AI Architect")
+st.write("Sistemi qendror me memorie, gjenerim kodi dhe optimizim promptesh.")
 
-# Titulli i aplikacionit
-st.markdown("<div class='main-title'>🤖 SmartAlbania</div>", unsafe_allow_html=True)
-st.markdown("<div class='main-title' style='font-size: 20px; color: #3b82f6;'>- AI Master CEO & Agents Dashboard</div>", unsafe_allow_html=True)
-st.markdown("<div class='sub-title'>Menaxho agjentët e automatizimit direkt nga telefoni yt.</div>", unsafe_allow_html=True)
+# Inicializimi i memories (Chat History)
+if "messages" not in st.session_state:
+    st.session_state.messages = []
 
-st.markdown("### Zgjidh Agjentin për të biseduar:")
+# Shfaqja e historikut të bisedës (Memory)
+for message in st.session_state.messages:
+    with st.chat_message(message["role"]):
+        st.markdown(message["content"])
 
-# Lista e agjentëve
-agents = {
-    "WhatsApp": {"icon": "🤖", "desc": "Gati për menaxhimin e mesazheve dhe klientëve."},
-    "Instagram": {"icon": "📸", "desc": "Gati për analizë fotosh, captions, reels dhe orare postimi."},
-    "Facebook": {"icon": "💬", "desc": "Gati për përgjigje automatike dhe komente."},
-    "CEO Master": {"icon": "🧠", "desc": "Agjenti kryesor që koordinon sistemin dhe ndihmon me kodim."}
-}
+# Fusha e shkrimit për përdoruesin
+if user_prompt := st.chat_input("Shkruaj kërkesën tënde për Master CEO..."):
+    # Shto mesazhin e përdoruesit në memorie
+    st.session_state.messages.append({"role": "user", "content": user_prompt})
+    with st.chat_message("user"):
+        st.markdown(user_prompt)
 
-if "selected_agent" not in st.session_state:
-    st.session_state.selected_agent = None
-
-cols = st.columns(len(agents))
-for i, (agent_name, data) in enumerate(agents.items()):
-    with cols[i]:
-        button_label = f"{data['icon']}\n{agent_name}"
-        if st.button(button_label, key=f"btn_{agent_name}", use_container_width=True):
-            st.session_state.selected_agent = agent_name
-            st.rerun()
-
-st.markdown("---")
-
-# Funksioni i zgjuar i CEO Master-it për të dhënë përgjigje teknike dhe kode
-def get_ceo_response(prompt):
-    p = prompt.lower()
-    if any(word in p for word in ["kod", "krijo", "ndrysho", "faqe", "python", "streamlit", "css"]):
-        return (
-            f"Si Master CEO dhe ekspert teknik, e analizova kërkesën tuaj: '{prompt}'.\n\n"
-            f"Për ta realizuar këtë në projektin tënd në Spck Editor, kodi i plotë që duhet të përdorësh është ky:\n\n"
-            "```python\n# Këtu mund të shtosh strukturën e re të kodit sipas dëshirës\nprint('SmartAlbania AI System Active')\n```\n\n"
-            "Kopjoje këtë ndryshim dhe vendose te skedari përkatës!"
+    # Logjika e Master CEO për të përpunuar kërkesën
+    with st.chat_message("assistant"):
+        response_container = st.empty()
+        
+        # Përgjigjja strategjike e CEO-s
+        ceo_reply = (
+            f"**Analiza e Master CEO (Smart Albania):**\n"
+            f"E kam regjistruar kërkesën: *'{user_prompt}'*.\n\n"
+            f"Për ta ekzekutuar këtë në mënyrë perfekte, po hartoj strategjinë teknike dhe tregtare për sistemet e tua të sigurisë dhe automatizimit."
         )
-    else:
-        return f"Përshëndetje! Si Master CEO i SmartAlbania, e mora mesazhin tuaj: '{prompt}'. Si mund t'ju ndihmoj më tej me zhvillimin e sistemeve ose kodimin sot?"
+        response_container.markdown(ceo_reply)
+        
+        # Ruaj përgjigjen në memorie
+        st.session_state.messages.append({"role": "assistant", "content": ceo_reply})
 
-# Zona e Chat-it
-if st.session_state.selected_agent:
-    current_agent = st.session_state.selected_agent
-    agent_info = agents[current_agent]
-    
-    st.success(f"Duke biseduar me **{current_agent}** — *{agent_info['desc']}*")
-    
-    chat_key = f"messages_{current_agent}"
-    if chat_key not in st.session_state:
-        st.session_state[chat_key] = [
-            {"role": "assistant", "content": f"Përshëndetje! Unë jam {current_agent}. Si mund t'ju ndihmoj sot?"}
-        ]
-    
-    for msg in st.session_state[chat_key]:
-        with st.chat_message(msg["role"]):
-            st.markdown(msg["content"])
-            
-    if user_input := st.chat_input(f"Shkruaj një mesazh për {current_agent}..."):
-        st.session_state[chat_key].append({"role": "user", "content": user_input})
-        with st.chat_message("user"):
-            st.markdown(user_input)
-            
-        with st.spinner(f"{current_agent} po analizon..."):
-            if current_agent == "CEO Master":
-                bot_response = get_ceo_response(user_input)
-            else:
-                bot_response = f"Përgjigje nga {current_agent}: Kërkesa u regjistrua me sukses."
-            
-        st.session_state[chat_key].append({"role": "assistant", "content": bot_response})
-        with st.chat_message("assistant"):
-            st.markdown(bot_response)
-else:
-    st.info("👆 Kliko një nga ikonat sipër për të zgjedhur agjentin dhe për të hapur dritaren e bisedës.")
+# --- MJETET ANËSORE (PROMPT ENGINEERING & CODE GENERATION) ---
+st.sidebar.title("🛠️ Mjetet e CEO-s")
+
+if st.sidebar.button("✨ Gjenero Prompt Inxhinierik Perfekt"):
+    if st.session_state.messages:
+        # Merr mesazhin e fundit të përdoruesit për ta optimizuar
+        last_user_msg = [m["content"] for m in st.session_state.messages if m["role"] == "user"]
+        context_query = last_user_msg[-1] if last_user_msg else "Zhvillim sistemi për Smart Albania"
+        
+        engineered_prompt = (
+            f"### 🤖 Prompt i Optimizuar Inxhinierik\n"
+            f"Kopjo këtë tekst dhe dërgoja modelit të AI për rezultatin më të lartë:\n\n"
+            f"```text\n"
+            f"Act as an elite Senior Software Architect and Marketing Automation Expert specialized in security systems (Hikvision, Dahua, Smart Home). "
+            f"Context: Operating Smart Albania business in Tirana. "
+            f"Task: {context_query}. "
+            f"Requirements: Provide production-ready, clean, error-free Python/Streamlit code and exact step-by-step execution logic. "
+            f"No placeholders, no generic summaries. Deliver professional execution.\n"
+            f"```"
+        )
+        st.sidebar.markdown(engineered_prompt)
+    else:
+        st.sidebar.warning("Shkruaj një mesazh në fillim që CEO të gjenerojë promptin.")
+
+if st.sidebar.button("💻 Krijo Kod Teknik (Snippet)"):
+    code_snippet = (
+        "```python\n"
+        "# Moduli automatik i Smart Albania për Instagram DM & Leads\n"
+        "import requests\n\n"
+        "def send_auto_reply(client_phone, message):\n"
+        "    print(f'Duke dërguar mesazh te {client_phone}: {message}')\n"
+        "    # Lidhja me Meta API / WhatsApp / Instagram\n"
+        "    return True\n"
+        "```"
+    )
+    st.sidebar.markdown("### Kodi i Gjeneruar:")
+    st.sidebar.markdown(code_snippet)
