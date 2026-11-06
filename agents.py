@@ -1,26 +1,8 @@
-"""Përkufizimi i agjentëve të SmartAlbania dhe lidhja me Claude API."""
+"""Përkufizimi i agjentëve të Smart Albania (rolet dhe udhëzimet e tyre)."""
 
 from __future__ import annotations
 
-import os
 from dataclasses import dataclass
-from typing import Iterator
-
-import anthropic
-
-# Modelet që mund të zgjidhen nga paneli anësor (i pari është parazgjedhja)
-MODELS = {
-    "Claude Opus 5.5 (më i fuqishmi)": "claude-opus-5-5",
-    "Claude Sonnet 5.5 (i shpejtë)": "claude-sonnet-5-5",
-    "Claude Haiku 5.5 (më i liri)": "claude-haiku-5-5",
-}
-DEFAULT_MODEL = "claude-opus-5-5"
-
-# Modelet që pranojnë rikthimin automatik në një model tjetër kur kërkesa refuzohet
-_FALLBACK_MODELS = {"claude-opus-5-5", "claude-sonnet-5-5"}
-
-# Sa mesazhe të fundit i dërgohen modelit si kontekst (kufizon koston)
-MAX_HISTORY_MESSAGES = 40
 
 _BASE_INSTRUCTIONS = (
     "Je pjesë e sistemit të agjentëve AI të Smart Albania, një biznes shqiptar që merret me "
@@ -62,7 +44,11 @@ AGENTS: dict[str, Agent] = {
                 "automatizim dhe strategji biznesi. Kur të kërkohet kod, jep kod të plotë dhe "
                 "funksional, dhe udhëzo përdoruesin hap pas hapi si një inxhinier software. "
                 "Kur një detyrë i përket një agjenti tjetër (Instagram, WhatsApp, Facebook, "
-                "TikTok), thuaj qartë cilin agjent të përdorë dhe çfarë t'i kërkojë."
+                "TikTok), thuaj qartë cilin agjent të përdorë dhe çfarë t'i kërkojë. "
+                "Ti je agjenti kryesor për kodim dhe zhvillim të këtij sistemi: kur përdoruesi "
+                "kërkon ndryshime në aplikacion, shpjego cilin skedar të ndryshojë dhe jep kodin "
+                "e plotë. Kur përdoruesi ndan fakte të rëndësishme për biznesin (çmime, "
+                "produkte, klientë, rregulla), sugjero t'i ruajë te \"Memoria afatgjatë\"."
             ),
             greeting="Përshëndetje! Jam Master CEO. Si mund të të ndihmoj me strategjinë ose kodin sot?",
         ),
@@ -122,72 +108,22 @@ AGENTS: dict[str, Agent] = {
 }
 
 
-def get_api_key(secrets: dict | None = None) -> str | None:
-    """Kërko çelësin e API-së te st.secrets dhe pastaj te variablat e mjedisit."""
-    if secrets:
-        key = secrets.get("ANTHROPIC_API_KEY")
-        if key:
-            return key
-    return os.environ.get("ANTHROPIC_API_KEY")
-
-
-def _build_history(messages: list[dict]) -> list[dict]:
-    """Merr mesazhet e fundit dhe sigurohu që historia të fillojë me përdoruesin."""
-    history = [
-        {"role": m["role"], "content": m["content"]}
-        for m in messages[-MAX_HISTORY_MESSAGES:]
-        if m["role"] in ("user", "assistant") and m["content"]
-    ]
-    while history and history[0]["role"] != "user":
-        history.pop(0)
-    return history
+def build_system_prompt(agent: Agent, memory_notes: list[str]) -> str:
+    """Udhëzimet e agjentit + memoria afatgjatë e përbashkët (shënimet e ruajtura)."""
+    prompt = agent.system_prompt
+    if memory_notes:
+        notes = "\n".join(f"- {n}" for n in memory_notes)
+        prompt += (
+            "\n\nMEMORIA AFATGJATË (fakte të ruajtura nga përdoruesi për biznesin; "
+            f"përdori kur janë relevante):\n{notes}"
+        )
+    return prompt
 
 
 def demo_reply(agent: Agent, user_message: str) -> str:
-    """Përgjigje kur nuk ka çelës API (modaliteti demo)."""
+    """Përgjigje kur nuk ka asnjë tru AI të lidhur (modaliteti demo)."""
     return (
         f"**[{agent.name} - modaliteti demo]** E mora kërkesën: *{user_message}*\n\n"
-        "Për përgjigje të vërteta nga AI, vendos `ANTHROPIC_API_KEY` te "
-        "`.streamlit/secrets.toml` ose si variabël mjedisi (shiko README.md)."
+        "Për përgjigje të vërteta nga AI, vendos `GEMINI_API_KEY` (falas) ose "
+        "`ANTHROPIC_API_KEY` te `.streamlit/secrets.toml`, ose përdor Ollama lokal (shiko README.md)."
     )
-
-
-def stream_reply(
-    agent: Agent,
-    messages: list[dict],
-    api_key: str,
-    model: str = DEFAULT_MODEL,
-) -> Iterator[str]:
-    """Dërgo bisedën te Claude dhe kthe përgjigjen copë-copë (streaming)."""
-    client = anthropic.Anthropic(api_key=api_key)
-    params: dict = dict(
-        model=model,
-        max_tokens=16000,
-        system=agent.system_prompt,
-        messages=_build_history(messages),
-        output_config={"effort": "medium"},
-    )
-    if model in _FALLBACK_MODELS:
-        # Nëse modeli refuzon kërkesën, API e rikalon automatikisht te një model tjetër
-        params["betas"] = ["server-side-fallback-2026-07-01"]
-        params["fallbacks"] = "default"
-
-    try:
-        with client.beta.messages.stream(**params) as stream:
-            for text in stream.text_stream:
-                yield text
-            final = stream.get_final_message()
-        if final.stop_reason == "refusal":
-            yield "\n\n_Kërkesa u refuzua nga modeli. Provo ta riformulosh._"
-        elif final.stop_reason == "max_tokens":
-            yield "\n\n_Përgjigjja u ndërpre sepse ishte shumë e gjatë. Shkruaj \"vazhdo\"._"
-    except anthropic.AuthenticationError:
-        yield "⚠️ Çelësi i API-së është i pavlefshëm. Kontrollo `ANTHROPIC_API_KEY`."
-    except anthropic.PermissionDeniedError:
-        yield "⚠️ Çelësi i API-së nuk ka leje për këtë model."
-    except anthropic.RateLimitError:
-        yield "⚠️ Shumë kërkesa njëherësh. Prit pak sekonda dhe provo përsëri."
-    except anthropic.APIStatusError as e:
-        yield f"⚠️ Gabim nga API ({e.status_code}): {e.message}"
-    except anthropic.APIConnectionError:
-        yield "⚠️ Nuk u lidh dot me Claude. Kontrollo internetin."
