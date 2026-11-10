@@ -34,25 +34,48 @@ def score_frame(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
-def signal_from_score(score: float, cfg) -> str:
-    if np.isnan(score):
-        return "PRIT"
-    if score >= cfg.buy_threshold:
-        return "BLI"
-    if score <= cfg.sell_threshold:
-        return "SHIT"
-    return "PRIT"
+def signal_frame(df: pd.DataFrame, cfg) -> pd.DataFrame:
+    """score_frame + kolonat `buy` / `sell` sipas strategjisë së zgjedhur te konfigurimi."""
+    s = score_frame(df)
+    c = s["close"]
+    # Niveli i thyerjes: maja / fundi i qirinjve të mëparshëm (pa qiririn aktual).
+    s["breakout_high"] = s["high"].rolling(cfg.breakout_entry).max().shift()
+    s["breakout_low"] = s["low"].rolling(cfg.breakout_exit).min().shift()
+    s["trend_ema"] = c.ewm(span=cfg.trend_ema, adjust=False, min_periods=cfg.trend_ema).mean()
+    if cfg.strategy == "breakout":
+        s["buy"] = (c > s["breakout_high"]) & (c > s["trend_ema"])
+        s["sell"] = c < s["breakout_low"]
+    else:
+        s["buy"] = s["score"] >= cfg.buy_threshold
+        s["sell"] = s["score"] <= cfg.sell_threshold
+    return s
+
+
+def warmup(cfg) -> int:
+    """Qirinjtë e nevojshëm para sinjalit të parë të besueshëm."""
+    return max(WARMUP, cfg.trend_ema, cfg.breakout_entry + 1, cfg.breakout_exit + 1)
 
 
 def analyze(df: pd.DataFrame, cfg, symbol: str = "", horizon: int = 12) -> dict:
     """Analizë e plotë e qiririt të fundit të mbyllur + parashikim për `horizon` qirinj."""
-    if len(df) < WARMUP + 5:
-        raise ValueError(f"Duhen të paktën {WARMUP + 5} qirinj, u morën {len(df)}")
-    s = score_frame(df)
+    need = warmup(cfg) + 5
+    if len(df) < need:
+        raise ValueError(f"Duhen të paktën {need} qirinj, u morën {len(df)}")
+    s = signal_frame(df, cfg)
     last = s.iloc[-1]
     price, a = float(last["close"]), float(last["atr"])
     score = float(last["score"])
-    signal = signal_from_score(score, cfg)
+    signal = "BLI" if last["buy"] else "SHIT" if last["sell"] else "PRIT"
+    if cfg.strategy == "breakout":
+        up = price > last["trend_ema"]
+        why = (f"çmimi theu majën e {cfg.breakout_entry} qirinjve ({last['breakout_high']:.6g}) në trend rritës"
+               if signal == "BLI" else
+               f"çmimi ra nën fundin e {cfg.breakout_exit} qirinjve ({last['breakout_low']:.6g})"
+               if signal == "SHIT" else
+               f"pa thyerje: duhet mbyllje mbi {last['breakout_high']:.6g}"
+               + ("" if up else f" dhe mbi EMA{cfg.trend_ema} ({last['trend_ema']:.6g})"))
+    else:
+        why = f"pikët {score:+.0f} (blerje ≥ {cfg.buy_threshold:g}, shitje ≤ {cfg.sell_threshold:g})"
     recent = s.tail(50)
     move = a * np.sqrt(horizon)  # lëvizja tipike e pritshme sipas luhatshmërisë
     drift = move * score / 100 * 0.5
@@ -76,6 +99,9 @@ def analyze(df: pd.DataFrame, cfg, symbol: str = "", horizon: int = 12) -> dict:
         "price": price,
         "score": round(score, 1),
         "signal": signal,
+        "signal_reason": why,
+        "breakout_high": float(last["breakout_high"]),
+        "breakout_low": float(last["breakout_low"]),
         "confidence": round(abs(score), 1),
         "direction": "RRITJE" if score > 15 else "RËNIE" if score < -15 else "ANASH",
         "components": components,
@@ -93,9 +119,9 @@ def analyze(df: pd.DataFrame, cfg, symbol: str = "", horizon: int = 12) -> dict:
         },
         "plan": {
             "entry": price,
-            "take_profit": price * (1 + cfg.take_profit_pct / 100),
+            "take_profit": price * (1 + cfg.take_profit_pct / 100) if cfg.take_profit_pct else None,
             "stop_loss": price * (1 - cfg.stop_loss_pct / 100),
-            "risk_reward": cfg.take_profit_pct / cfg.stop_loss_pct,
+            "exit_level": float(last["breakout_low"]) if cfg.strategy == "breakout" else None,
         },
     }
 
@@ -104,15 +130,18 @@ def format_report(a: dict, cfg) -> str:
     f, p, i = a["forecast"], a["plan"], a["indicators"]
     lines = [
         f"=== {a['symbol']} ({cfg.timeframe}) – {a['time']} ===",
-        f"Çmimi: {a['price']:.6g}   Sinjali: {a['signal']}   Pikët: {a['score']:+.1f}/100",
-        f"Drejtimi i pritshëm: {a['direction']} (besueshmëria {a['confidence']:.0f}%)",
-        "Arsyet:",
+        f"Çmimi: {a['price']:.6g}   Sinjali: {a['signal']} – {a['signal_reason']}",
+        f"Pikët e treguesve: {a['score']:+.1f}/100 → drejtimi {a['direction']}",
+        "Treguesit:",
         *[f"  - {r}" for r in a["reasons"]],
         f"EMA20 {i['ema20']:.6g} | EMA50 {i['ema50']:.6g} | EMA200 {i['ema200']:.6g} | RSI {i['rsi']:.1f}",
         f"Mbështetja: {a['support']:.6g}   Rezistenca: {a['resistance']:.6g}",
         f"Parashikimi për {f['horizon_candles']} qirinjtë e ardhshëm: ~{f['expected']:.6g} "
         f"(brezi {f['low']:.6g} – {f['high']:.6g}, luhatshmëria {f['volatility_pct']:.2f}%/qiri)",
-        f"Plani: hyrje {p['entry']:.6g} | fitim +{cfg.take_profit_pct}% → {p['take_profit']:.6g} | "
-        f"humbje −{cfg.stop_loss_pct}% → {p['stop_loss']:.6g} | raporti fitim/rrezik {p['risk_reward']:.2f}",
+        "Plani: hyrje {:.6g} | fitim {} | humbje −{:g}% → {:.6g}{}".format(
+            p["entry"],
+            f"+{cfg.take_profit_pct:g}% → {p['take_profit']:.6g}" if p["take_profit"] else "i hapur (pa kufi)",
+            cfg.stop_loss_pct, p["stop_loss"],
+            f" | dalje nga trendi nën {p['exit_level']:.6g}" if p["exit_level"] else ""),
     ]
     return "\n".join(lines)

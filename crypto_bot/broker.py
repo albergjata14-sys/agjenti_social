@@ -61,7 +61,8 @@ class Broker:
             qty = cost * (1 - fee) / price
             self.state["cash"] -= cost
         pos = {"qty": qty, "entry": price, "cost": cost, "high": price, "opened": time.time(),
-               "sl": price * (1 - cfg.stop_loss_pct / 100), "tp": price * (1 + cfg.take_profit_pct / 100)}
+               "sl": price * (1 - cfg.stop_loss_pct / 100),
+               "tp": price * (1 + cfg.take_profit_pct / 100) if cfg.take_profit_pct else None}
         self.positions[symbol] = pos
         self.save()
         return pos
@@ -99,7 +100,7 @@ class Broker:
         pos = self.positions[symbol]
         if price <= pos["sl"]:
             return "stop-loss"
-        if price >= pos["tp"]:
+        if pos["tp"] and price >= pos["tp"]:
             return "take-profit"
         if self.cfg.trailing_stop_pct and price > pos["high"]:
             pos["high"] = price

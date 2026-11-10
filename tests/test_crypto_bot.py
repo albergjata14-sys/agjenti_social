@@ -1,3 +1,5 @@
+import json
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -8,7 +10,7 @@ from crypto_bot.broker import Broker
 from crypto_bot.config import Config, load_config
 from crypto_bot.data import fetch_candles, top_symbols
 from crypto_bot.indicators import rsi
-from crypto_bot.strategy import analyze, score_frame
+from crypto_bot.strategy import analyze, score_frame, signal_frame
 
 
 def candles(closes, vol=100.0):
@@ -31,7 +33,7 @@ def test_rsi_extremes():
 
 
 def test_signals_follow_trend():
-    cfg = Config()
+    cfg = Config(strategy="score", take_profit_pct=4, stop_loss_pct=2)
     up, down = candles(trend(600, 100, 0.002)), candles(trend(600, 100, -0.002))
     su, sd = score_frame(up)["score"].dropna(), score_frame(down)["score"].dropna()
     assert (su >= cfg.buy_threshold).mean() > 3 * (su <= cfg.sell_threshold).mean()
@@ -55,7 +57,7 @@ def test_no_lookahead():
 
 
 def test_backtest_take_profit_and_stop_loss():
-    always_in = dict(buy_threshold=-1000, sell_threshold=-2000, fee_pct=0)
+    always_in = dict(strategy="score", buy_threshold=-1000, sell_threshold=-2000, fee_pct=0)
     r = backtest(candles(trend(600, 100, 0.002)), Config(take_profit_pct=5, stop_loss_pct=50, **always_in))
     assert r["trades"] > 3
     assert all(t["reason"] == "take-profit" and t["pnl_pct"] == pytest.approx(5) for t in r["trade_list"][:-1])
@@ -67,7 +69,7 @@ def test_backtest_take_profit_and_stop_loss():
     assert r["end"] < r["start"] and r["max_drawdown_pct"] > 0
 
     # Pa sinjale nuk ka tregti.
-    assert backtest(candles(trend(600, 100, 0.002)), Config(buy_threshold=1000))["trades"] == 0
+    assert backtest(candles(trend(600, 100, 0.002)), Config(strategy="score", buy_threshold=1000))["trades"] == 0
 
 
 def test_config_validation(tmp_path):
@@ -80,6 +82,9 @@ def test_config_validation(tmp_path):
     p.write_text('{"take_profit_pct": 7}')
     assert load_config(p, stop_loss_pct=3).take_profit_pct == 7
     assert load_config().symbols == ["BTC/USDT"]
+    assert load_config() == Config()  # config.json dhe parazgjedhjet në kod përputhen
+    with pytest.raises(ValueError):
+        Config(strategy="x").validate()
 
 
 class FakeExchange:
@@ -131,8 +136,13 @@ def test_top_symbols_filters_and_ranks():
     assert top_symbols(ex, "USDT", 2) == ["ETH/USDT", "BTC/USDT"]
 
 
+def read_log(cfg):
+    return [json.loads(line) for line in open(cfg.log_file, encoding="utf-8")]
+
+
 def test_paper_bot_buys_then_exits(tmp_path):
     cfg = Config(symbols=["BTC/USDT", "ETH/USDT"], candles=300, state_file=str(tmp_path / "s.json"),
+                 log_file=str(tmp_path / "d.jsonl"), strategy="score", max_daily_loss_pct=0,
                  take_profit_pct=4, stop_loss_pct=2, max_open_positions=1, fee_pct=0.1)
     ex = make_fake({"BTC/USDT": trend(400, 100, 0.002), "ETH/USDT": trend(400, 100, -0.002)})
     broker = Broker(cfg)
@@ -141,21 +151,73 @@ def test_paper_bot_buys_then_exits(tmp_path):
     pos = broker.positions["BTC/USDT"]
     assert broker.cash() == pytest.approx(900)
     assert pos["tp"] == pytest.approx(pos["entry"] * 1.04) and pos["sl"] == pytest.approx(pos["entry"] * 0.98)
+    # Çdo vendim regjistrohet me arsyen: blerja e BTC dhe mosblerja e ETH.
+    logged = {e["symbol"]: e["action"] for e in read_log(cfg)}
+    assert logged["BTC/USDT"] == "BLI" and logged["ETH/USDT"] in ("PRIT", "SHIT") and len(logged) == 2
+    assert all(e["reason"] for e in read_log(cfg))
 
     # Gjendja mbijeton rinisjen; çmimi prek take-profit → shitje me fitim.
     broker = Broker(cfg)
     ex.last["BTC/USDT"] = pos["entry"] * 1.05
     actions = run_cycle(ex, broker, cfg)
-    assert actions[0][0] == "SHIT" and actions[0][2]["reason"] == "take-profit"
-    assert actions[0][2]["pnl"] > 0
-
-    # Blerja e re pas daljes, pastaj rënie → stop-loss me humbje.
-    sym = next(iter(broker.positions))
-    ex.last[sym] = broker.positions[sym]["entry"] * 0.97
-    broker.cfg = cfg = Config(**{**cfg.__dict__, "buy_threshold": 1000})
-    actions = run_cycle(ex, broker, cfg)
-    assert actions[0][2]["reason"] == "stop-loss" and actions[0][2]["pnl"] < 0
+    assert len(actions) == 1 and actions[0][2]["reason"] == "take-profit" and actions[0][2]["pnl"] > 0
+    # Pa ri-hyrje në të njëjtin qiri: sinjali i vjetër nuk përdoret dy herë.
     assert not broker.positions
+    assert run_cycle(ex, broker, cfg) == [] and not broker.positions
+    assert len(read_log(cfg)) == 3  # vendimet e të njëjtit qiri nuk përsëriten në regjistër
+
+
+def test_stop_loss_and_daily_loss_halt(tmp_path):
+    cfg = Config(symbols=["BTC/USDT", "ETH/USDT"], candles=300, state_file=str(tmp_path / "s.json"),
+                 log_file=str(tmp_path / "d.jsonl"), strategy="score", position_size_pct=100,
+                 stop_loss_pct=6, max_daily_loss_pct=5, max_open_positions=1)
+    ex = make_fake({"BTC/USDT": trend(400, 100, 0.002), "ETH/USDT": trend(400, 100, 0.002)})
+    broker = Broker(cfg)
+    bought = run_cycle(ex, broker, cfg)[0][1]
+    skipped = [e for e in read_log(cfg) if e["action"] == "ANASHKALO"]
+    assert len(skipped) == 1 and "maksimal" in skipped[0]["reason"]
+    ex.last[bought] = broker.positions[bought]["entry"] * 0.93
+    actions = run_cycle(ex, broker, cfg)
+    # Stop-loss shet me humbje; humbja ditore (−7%) kalon kufirin 5% → asnjë blerje e re sot.
+    assert [(a[0], a[2]["reason"]) for a in actions] == [("SHIT", "stop-loss")]
+    assert actions[0][2]["pnl_pct"] < -6 and not broker.positions
+    other = next(s for s in cfg.symbols if s != bought)
+    assert run_cycle(ex, broker, cfg) == []
+    # Ditën tjetër kufiri rifillon nga kapitali i ri.
+    broker.state["day"] = "2000-01-01"
+    assert [(a[0], a[1]) for a in run_cycle(ex, broker, cfg)] == [("BLI", other)]
+
+
+def breakout_series():
+    """Rritje e ngadaltë, pastaj plato, thyerje lart dhe në fund rënie e fortë."""
+    rng = np.random.default_rng(5)
+    base = np.r_[trend(260, 100, 0.001, 0.002), np.full(60, np.nan)]
+    plateau = base[259] * (1 + rng.normal(0, 0.001, 60))
+    base[260:] = plateau
+    up = plateau[-1] * np.cumprod(np.full(30, 1.01))
+    down = up[-1] * np.cumprod(np.full(40, 0.985))
+    return np.r_[base, up, down]
+
+
+def test_breakout_strategy():
+    cfg = Config(fee_pct=0)  # parazgjedhja: breakout 55/20, pa take-profit, stop 8%
+    assert cfg.strategy == "breakout"
+    closes = breakout_series()
+    df = candles(closes)
+    s = signal_frame(df, cfg)
+    assert not s["buy"].iloc[270:320].any()          # në plato nuk ka thyerje
+    assert s["buy"].iloc[320:325].any()              # thyerja e majës jep sinjal blerjeje
+    assert s["sell"].iloc[350:].any()                # rënia nën fundin e 20 qirinjve jep shitje
+    a = analyze(df.iloc[:322], cfg, "X/USDT")
+    assert a["signal"] == "BLI" and "theu majën" in a["signal_reason"]
+    assert a["plan"]["take_profit"] is None and a["plan"]["stop_loss"] == pytest.approx(a["price"] * 0.92)
+    assert "pa thyerje" in analyze(df.iloc[:300], cfg)["signal_reason"]
+
+    r = backtest(df, cfg)
+    assert r["trades"] == 1 and r["trade_list"][0]["pnl_pct"] > 10
+    assert r["trade_list"][0]["reason"] in ("sinjal", "stop-loss")
+    # Në trend rënës (nën EMA200) nuk blihet asnjëherë.
+    assert backtest(candles(trend(600, 100, -0.002)), cfg)["trades"] == 0
 
 
 def test_trailing_stop_moves_up(tmp_path):
@@ -190,7 +252,7 @@ class FakeLive:
 
 
 def test_live_broker_sends_orders_and_uses_fill_price(tmp_path):
-    cfg = Config(state_file=str(tmp_path / "live.json"), position_size_pct=10, fee_pct=0.1)
+    cfg = Config(state_file=str(tmp_path / "live.json"), position_size_pct=10, fee_pct=0.1, take_profit_pct=4)
     ex = FakeLive()
     b = Broker(cfg, ex)
     pos = b.buy("BTC/USDT", 100.0, 500.0)

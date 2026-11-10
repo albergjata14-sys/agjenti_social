@@ -17,12 +17,16 @@ def render():
     c1, c2, c3 = st.columns(3)
     exchange_name = c1.text_input("Platforma", base.exchange)
     symbol = c2.text_input("Monedha", base.symbols[0])
-    timeframe = c3.selectbox("Intervali", ["15m", "1h", "4h", "1d"], index=1)
+    tfs = ["15m", "1h", "4h", "1d"]
+    timeframe = c3.selectbox("Intervali", tfs, index=tfs.index(base.timeframe) if base.timeframe in tfs else 2)
+    strategy = st.radio("Strategjia", ["breakout", "score"], horizontal=True,
+                        index=["breakout", "score"].index(base.strategy),
+                        help="breakout = thyerje maje në trend rritës; score = pikët e treguesve")
     c1, c2, c3 = st.columns(3)
-    tp = c1.number_input("Fitimi (take-profit) %", 0.1, 500.0, float(base.take_profit_pct), 0.5)
+    tp = c1.number_input("Fitimi % (0 = i hapur)", 0.0, 500.0, float(base.take_profit_pct), 0.5)
     sl = c2.number_input("Humbja (stop-loss) %", 0.1, 99.0, float(base.stop_loss_pct), 0.5)
     trail = c3.number_input("Trailing stop % (0 = fikur)", 0.0, 99.0, float(base.trailing_stop_pct), 0.5)
-    cfg = load_config(exchange=exchange_name, symbols=[symbol], timeframe=timeframe,
+    cfg = load_config(exchange=exchange_name, strategy=strategy, symbols=[symbol], timeframe=timeframe,
                       take_profit_pct=tp, stop_loss_pct=sl, trailing_stop_pct=trail)
 
     b1, b2, b3 = st.columns(3)
@@ -37,18 +41,21 @@ def render():
             m3.metric("Drejtimi", a["direction"], f"besueshmëria {a['confidence']:.0f}%")
             st.line_chart(score_frame(df)[["close", "ema20", "ema50", "ema200"]].tail(200))
             f, p = a["forecast"], a["plan"]
-            st.markdown("**Arsyet:**\n" + "\n".join(f"- {r}" for r in a["reasons"]))
+            st.markdown(f"**Sinjali {a['signal']}:** {a['signal_reason']}")
+            st.markdown("**Treguesit:**\n" + "\n".join(f"- {r}" for r in a["reasons"]))
             st.markdown(
                 f"**Parashikimi ({f['horizon_candles']} qirinj):** ~{f['expected']:.6g} "
                 f"(brezi {f['low']:.6g} – {f['high']:.6g})\n\n"
                 f"**Mbështetja / Rezistenca:** {a['support']:.6g} / {a['resistance']:.6g}\n\n"
-                f"**Plani:** hyrje {p['entry']:.6g} · fitim {p['take_profit']:.6g} · stop {p['stop_loss']:.6g}")
+                f"**Plani:** hyrje {p['entry']:.6g} · fitim "
+                f"{'%.6g' % p['take_profit'] if p['take_profit'] else 'i hapur'} · stop {p['stop_loss']:.6g}"
+                + (f" · dalje nga trendi nën {p['exit_level']:.6g}" if p["exit_level"] else ""))
         if b2.button("Skano tregun", width="stretch"):
             cfg.scan_market = True
             with st.spinner("Duke skanuar tregun..."):
                 rows = scan(make_exchange(cfg), cfg)
             st.dataframe(pd.DataFrame([{"Monedha": r["symbol"], "Çmimi": r["price"], "Pikët": r["score"],
-                                        "Sinjali": r["signal"], "Drejtimi": r["direction"]} for r in rows]),
+                                        "Sinjali": r["signal"], "Arsyeja": r["signal_reason"]} for r in rows]),
                          width="stretch", hide_index=True)
         if b3.button("Backtest", width="stretch"):
             df = fetch_candles(make_exchange(cfg), symbol, timeframe, max(cfg.candles, 1000))

@@ -1,17 +1,19 @@
 """Testimi i strategjisë mbi të dhëna historike me fitim/humbje në përqindje."""
 import numpy as np
 
-from .strategy import WARMUP, score_frame
+from .strategy import signal_frame, warmup
 
 
 def backtest(df, cfg) -> dict:
     """Simulon strategjinë qiri pas qiriu. Hyrja bëhet në hapjen e qiririt pasardhës."""
-    s = score_frame(df)
+    s = signal_frame(df, cfg)
+    start_i = warmup(cfg)
     fee = cfg.fee_pct / 100
     cash = start = float(cfg.paper_balance)
     pos = None
     trades, equity = [], []
-    o, h, l, c, score = (s[k].to_numpy() for k in ["open", "high", "low", "close", "score"])
+    o, h, l, c, buy, sell = (s[k].to_numpy() for k in ["open", "high", "low", "close", "buy", "sell"])
+    tp_mult = 1 + cfg.take_profit_pct / 100 if cfg.take_profit_pct else float("inf")
 
     def close(i, price, reason):
         nonlocal cash, pos
@@ -22,14 +24,13 @@ def backtest(df, cfg) -> dict:
                        "pnl": proceeds - pos["cost"], "pnl_pct": (proceeds / pos["cost"] - 1) * 100})
         pos = None
 
-    for i in range(WARMUP, len(s)):
-        prev = score[i - 1]
-        if pos is None and prev >= cfg.buy_threshold:
+    for i in range(start_i, len(s)):
+        if pos is None and buy[i - 1]:
             cost = cash * cfg.position_size_pct / 100
             pos = {"i": i, "entry": o[i], "qty": cost * (1 - fee) / o[i], "cost": cost, "high": o[i],
-                   "sl": o[i] * (1 - cfg.stop_loss_pct / 100), "tp": o[i] * (1 + cfg.take_profit_pct / 100)}
+                   "sl": o[i] * (1 - cfg.stop_loss_pct / 100), "tp": o[i] * tp_mult}
             cash -= cost
-        elif pos is not None and prev <= cfg.sell_threshold:
+        elif pos is not None and sell[i - 1]:
             close(i, o[i], "sinjal")
         if pos is not None:
             # Nëse i njëjti qiri prek edhe stop-in edhe fitimin, supozohet rasti më i keq (stop).
@@ -50,7 +51,7 @@ def backtest(df, cfg) -> dict:
     gross_win = sum(t["pnl"] for t in wins)
     gross_loss = -sum(t["pnl"] for t in trades if t["pnl"] <= 0)
     peak = np.maximum.accumulate(eq)
-    first = c[WARMUP] if len(s) > WARMUP else c[-1]
+    first = c[start_i] if len(s) > start_i else c[-1]
     return {
         "start": start, "end": float(eq[-1]),
         "return_pct": (eq[-1] / start - 1) * 100,
@@ -65,7 +66,8 @@ def backtest(df, cfg) -> dict:
 
 def format_backtest(r: dict, cfg, symbol: str) -> str:
     return "\n".join([
-        f"=== Backtest {symbol} ({cfg.timeframe}) | fitim +{cfg.take_profit_pct}% / humbje −{cfg.stop_loss_pct}% ===",
+        f"=== Backtest {symbol} ({cfg.timeframe}, strategjia {cfg.strategy}) | fitim "
+        f"{'+%g%%' % cfg.take_profit_pct if cfg.take_profit_pct else 'i hapur'} / humbje −{cfg.stop_loss_pct:g}% ===",
         f"Kapitali: {r['start']:.2f} → {r['end']:.2f}  ({r['return_pct']:+.2f}%)",
         f"Mbajtja pa tregtuar (buy & hold) për krahasim: {r['buy_hold_pct']:+.2f}% e çmimit",
         f"Tregti: {r['trades']} | fituese: {r['wins']} ({r['win_rate_pct']:.1f}%) | "

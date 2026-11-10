@@ -3,3 +3,4 @@ __pycache__/
 .pytest_cache/
 crypto_bot_state*.json
 crypto_bot_state*.tmp
+crypto_bot_decisions*.jsonl
