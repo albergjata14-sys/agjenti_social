@@ -3,7 +3,7 @@ import os
 
 import pandas as pd
 
-STABLES = {"USDT", "USDC", "BUSD", "DAI", "TUSD", "FDUSD", "USDP", "EUR", "GBP", "USD", "PYUSD", "USDE"}
+STABLES = {"USDT", "USDC", "BUSD", "DAI", "TUSD", "FDUSD", "USDP", "EUR", "GBP", "USD", "PYUSD", "USDE", "USD1"}
 LEVERAGED = ("UP", "DOWN", "BULL", "BEAR", "3L", "3S")
 
 
@@ -21,7 +21,11 @@ def make_exchange(cfg, with_keys: bool = False):
         params.update(apiKey=key, secret=secret)
         if os.environ.get("CRYPTO_API_PASSWORD"):
             params["password"] = os.environ["CRYPTO_API_PASSWORD"]
-    return getattr(ccxt, cfg.exchange)(params)
+    exchange = getattr(ccxt, cfg.exchange)(params)
+    proxy = os.environ.get("HTTPS_PROXY") or os.environ.get("https_proxy")
+    if proxy:  # ccxt nuk e lexon vetë proxy-n e sistemit
+        exchange.https_proxy = proxy
+    return exchange
 
 
 def to_frame(rows) -> pd.DataFrame:

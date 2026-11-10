@@ -8,7 +8,7 @@ DEFAULT_PATH = Path(__file__).with_name("config.json")
 
 @dataclass
 class Config:
-    exchange: str = "binance"          # çdo platformë që mbështet ccxt (binance, kraken, bybit, okx...)
+    exchange: str = "mexc"             # çdo platformë që mbështet ccxt (mexc, binance, kraken, bybit...)
     quote: str = "USDT"                # monedha bazë me të cilën blihet
     symbols: list = field(default_factory=lambda: ["BTC/USDT"])
     scan_market: bool = False          # True = skano gjithë tregun, jo vetëm `symbols`
