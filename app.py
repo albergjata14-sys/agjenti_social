@@ -15,7 +15,7 @@ if "messages" not in st.session_state:
 st.sidebar.title("🧭 Paneli i Kontrollit")
 selected_agent = st.sidebar.radio(
     "Zgjidh Agjentin / Qendrën:",
-    ["Master CEO (Qendra & Memoria)", "Instagram Agent", "WhatsApp Agent", "Facebook Agent", "TikTok Agent"]
+    ["Master CEO (Qendra & Memoria)", "Instagram Agent", "WhatsApp Agent", "Facebook Agent", "TikTok Agent", "Crypto Trading Agent"]
 )
 
 st.sidebar.markdown("---")
@@ -58,7 +58,12 @@ if selected_agent == "Master CEO (Qendra & Memoria)":
     if st.sidebar.button("Krijo Kod Teknik Snippet"):
         st.sidebar.markdown("`# Kod i gjeneruar nga CEO për Smart Albania`")
 
-# 2. LOGJIKA E AGJENTEVE TË TJERË (QË NUK HUMBASIN MË)
+# 2. ROBOTI I KRIPTOVE (ANALIZË, PARASHIKIM, BACKTEST)
+elif selected_agent == "Crypto Trading Agent":
+    from crypto_bot.ui import render as render_crypto
+    render_crypto()
+
+# 3. LOGJIKA E AGJENTEVE TË TJERË (QË NUK HUMBASIN MË)
 else:
     st.header(f"🛠️ Agjenti i Specializuar: {selected_agent}")
     st.write(f"Ky është moduli i dedikuar për menaxhimin e {selected_agent} për Smart Albania.")
