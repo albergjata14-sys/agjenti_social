@@ -1,5 +1,6 @@
 {
   "exchange": "mexc",
+  "testnet": false,
   "quote": "USDT",
   "symbols": [
     "BTC/USDT"
@@ -12,12 +13,17 @@
   "breakout_entry": 55,
   "breakout_exit": 20,
   "trend_ema": 200,
+  "daily_trend_ema": 50,
   "take_profit_pct": 0.0,
   "stop_loss_pct": 8.0,
+  "stop_loss_atr": 0.0,
   "trailing_stop_pct": 0.0,
-  "position_size_pct": 10.0,
+  "risk_per_trade_pct": 1.0,
+  "position_size_pct": 25.0,
   "max_open_positions": 3,
   "max_daily_loss_pct": 5.0,
+  "max_consecutive_losses": 3,
+  "max_spread_pct": 0.5,
   "buy_threshold": 35,
   "sell_threshold": -35,
   "fee_pct": 0.1,

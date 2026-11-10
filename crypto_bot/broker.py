@@ -4,6 +4,8 @@ import os
 import time
 from pathlib import Path
 
+from .strategy import position_cost
+
 
 class Broker:
     """Mban kapitalin dhe pozicionet. Me `exchange` të dhënë, urdhrat dërgohen realisht."""
@@ -37,10 +39,14 @@ class Broker:
     def equity(self, prices: dict) -> float:
         return self.cash() + sum(p["qty"] * prices.get(s, p["entry"]) for s, p in self.positions.items())
 
-    def buy(self, symbol: str, price: float, equity: float):
-        """Blen me `position_size_pct` të kapitalit. Kthen pozicionin ose None nëse s'ka fonde."""
+    def buy(self, symbol: str, price: float, equity: float, stop_pct: float = None):
+        """Blen sipas rrezikut të lejuar. Kthen pozicionin ose None nëse s'ka fonde.
+
+        `stop_pct` është largësia e stop-loss nga hyrja në % (parazgjedhur stop_loss_pct).
+        """
         cfg, fee = self.cfg, self.cfg.fee_pct / 100
-        cost = min(equity * cfg.position_size_pct / 100, self.cash())
+        stop_pct = stop_pct or cfg.stop_loss_pct
+        cost = min(position_cost(cfg, equity, stop_pct), self.cash())
         if cost <= 0 or symbol in self.positions:
             return None
         if self.live:
@@ -48,7 +54,10 @@ class Broker:
             limits = self.exchange.market(symbol).get("limits", {})
             if qty <= 0 or cost < (limits.get("cost", {}).get("min") or 0) or qty < (limits.get("amount", {}).get("min") or 0):
                 return None
-            order = self.exchange.create_order(symbol, "market", "buy", qty)
+            # Platformat që e mbështesin (MT5) e vendosin stop-in edhe në server.
+            params = ({"stopLossPrice": price * (1 - stop_pct / 100)}
+                      if getattr(self.exchange, "stop_on_order", False) else {})
+            order = self.exchange.create_order(symbol, "market", "buy", qty, None, params)
             order = self._settled(order, symbol)
             qty = float(order.get("filled") or qty)
             price = float(order.get("average") or price)
@@ -61,7 +70,7 @@ class Broker:
             qty = cost * (1 - fee) / price
             self.state["cash"] -= cost
         pos = {"qty": qty, "entry": price, "cost": cost, "high": price, "opened": time.time(),
-               "sl": price * (1 - cfg.stop_loss_pct / 100),
+               "sl": price * (1 - stop_pct / 100),
                "tp": price * (1 + cfg.take_profit_pct / 100) if cfg.take_profit_pct else None}
         self.positions[symbol] = pos
         self.save()

@@ -3,7 +3,7 @@ import json
 import time
 from datetime import datetime, timezone
 
-from .data import fetch_candles, top_symbols
+from .data import fetch_candles, fetch_daily, spread_pct, top_symbols
 from .strategy import analyze
 
 
@@ -21,7 +21,7 @@ def scan(exchange, cfg, symbols=None) -> list:
     for sym in symbols or watchlist(exchange, cfg):
         try:
             df = fetch_candles(exchange, sym, cfg.timeframe, cfg.candles)
-            results.append(analyze(df, cfg, sym))
+            results.append(analyze(df, cfg, sym, daily=fetch_daily(exchange, sym, cfg, df)))
         except Exception as e:  # një monedhë e dështuar nuk duhet të ndalë skanimin
             log(f"{sym}: u anashkalua ({e})")
     return sorted(results, key=lambda a: a["score"], reverse=True)
@@ -33,6 +33,17 @@ def record(cfg, **entry):
         entry = {"time": datetime.now(timezone.utc).isoformat(timespec="seconds"), **entry}
         with open(cfg.log_file, "a", encoding="utf-8") as f:
             f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+
+
+def losses_in_row(trades: list, today: str) -> int:
+    """Sa tregtitë e fundit të sotme (UTC) janë mbyllur me humbje radhazi."""
+    n = 0
+    for t in reversed(trades):
+        day = datetime.fromtimestamp(t["closed"], timezone.utc).strftime("%Y-%m-%d")
+        if day != today or t["pnl"] > 0:
+            break
+        n += 1
+    return n
 
 
 def _sell(broker, cfg, sym, price, reason, actions, score=None):
@@ -69,7 +80,11 @@ def run_cycle(exchange, broker, cfg) -> list:
     if st.get("day") != today:
         st["day"], st["day_start_equity"] = today, equity
     day_pct = (equity / st["day_start_equity"] - 1) * 100 if st["day_start_equity"] else 0.0
-    halted = bool(cfg.max_daily_loss_pct) and day_pct <= -cfg.max_daily_loss_pct
+    halted = None
+    if cfg.max_daily_loss_pct and day_pct <= -cfg.max_daily_loss_pct:
+        halted = f"kufiri ditor i humbjes u prek ({day_pct:+.2f}%)"
+    elif cfg.max_consecutive_losses and losses_in_row(st["trades"], today) >= cfg.max_consecutive_losses:
+        halted = f"{cfg.max_consecutive_losses} humbje radhazi sot"
 
     # 4) Hap pozicione të reja. Çdo vendim regjistrohet një herë për çdo qiri të ri.
     seen, entered = st.setdefault("last_logged", {}), st.setdefault("last_entry_signal", {})
@@ -84,11 +99,13 @@ def run_cycle(exchange, broker, cfg) -> list:
         elif entered.get(sym) == a["time"]:
             skip = "ky sinjal është përdorur tashmë (pa ri-hyrje në të njëjtin qiri)"
         elif halted:
-            skip = f"kufiri ditor i humbjes u prek ({day_pct:+.2f}%)"
+            skip = halted
         elif len(broker.positions) >= cfg.max_open_positions:
             skip = f"numri maksimal i pozicioneve ({cfg.max_open_positions})"
+        elif cfg.max_spread_pct and (spread := spread_pct(exchange, sym) or 0) > cfg.max_spread_pct:
+            skip = f"diferenca blerje/shitje shumë e madhe ({spread:.2f}% > {cfg.max_spread_pct:g}%)"
         else:
-            pos = broker.buy(sym, a["price"], equity)
+            pos = broker.buy(sym, a["price"], equity, a["plan"]["stop_pct"])
             if pos:
                 entered[sym] = a["time"]
                 actions.append(("BLI", sym, pos))

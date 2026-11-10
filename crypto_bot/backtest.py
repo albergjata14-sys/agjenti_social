@@ -1,12 +1,13 @@
 """Testimi i strategjisë mbi të dhëna historike me fitim/humbje në përqindje."""
 import numpy as np
 
-from .strategy import signal_frame, warmup
+from .strategy import position_cost, signal_frame, stop_distance_pct, warmup
 
 
-def backtest(df, cfg) -> dict:
+def backtest(df, cfg, daily=None) -> dict:
     """Simulon strategjinë qiri pas qiriu. Hyrja bëhet në hapjen e qiririt pasardhës."""
-    s = signal_frame(df, cfg)
+    s = signal_frame(df, cfg, daily)
+    atr = s["atr"].to_numpy()
     start_i = warmup(cfg)
     fee = cfg.fee_pct / 100
     cash = start = float(cfg.paper_balance)
@@ -26,9 +27,10 @@ def backtest(df, cfg) -> dict:
 
     for i in range(start_i, len(s)):
         if pos is None and buy[i - 1]:
-            cost = cash * cfg.position_size_pct / 100
+            stop_pct = stop_distance_pct(cfg, o[i], atr[i - 1])
+            cost = position_cost(cfg, cash, stop_pct)
             pos = {"i": i, "entry": o[i], "qty": cost * (1 - fee) / o[i], "cost": cost, "high": o[i],
-                   "sl": o[i] * (1 - cfg.stop_loss_pct / 100), "tp": o[i] * tp_mult}
+                   "sl": o[i] * (1 - stop_pct / 100), "tp": o[i] * tp_mult}
             cash -= cost
         elif pos is not None and sell[i - 1]:
             close(i, o[i], "sinjal")
@@ -67,7 +69,8 @@ def backtest(df, cfg) -> dict:
 def format_backtest(r: dict, cfg, symbol: str) -> str:
     return "\n".join([
         f"=== Backtest {symbol} ({cfg.timeframe}, strategjia {cfg.strategy}) | fitim "
-        f"{'+%g%%' % cfg.take_profit_pct if cfg.take_profit_pct else 'i hapur'} / humbje −{cfg.stop_loss_pct:g}% ===",
+        f"{'+%g%%' % cfg.take_profit_pct if cfg.take_profit_pct else 'i hapur'} / humbje "
+        f"{'%g × ATR' % cfg.stop_loss_atr if cfg.stop_loss_atr else '−%g%%' % cfg.stop_loss_pct} ===",
         f"Kapitali: {r['start']:.2f} → {r['end']:.2f}  ({r['return_pct']:+.2f}%)",
         f"Mbajtja pa tregtuar (buy & hold) për krahasim: {r['buy_hold_pct']:+.2f}% e çmimit",
         f"Tregti: {r['trades']} | fituese: {r['wins']} ({r['win_rate_pct']:.1f}%) | "

@@ -5,7 +5,7 @@ from .backtest import backtest, format_backtest
 from .bot import run_forever, scan
 from .broker import Broker
 from .config import load_config
-from .data import fetch_candles, make_exchange
+from .data import fetch_candles, fetch_daily, make_exchange
 from .strategy import format_report
 
 
@@ -14,7 +14,8 @@ def main(argv=None):
     p.add_argument("komanda", choices=["analizo", "skano", "backtest", "nis"])
     p.add_argument("--config", help="rruga e config.json")
     p.add_argument("--symbol", help="p.sh. BTC/USDT")
-    p.add_argument("--exchange", help="p.sh. binance, kraken, bybit")
+    p.add_argument("--exchange", help="mexc, binance, bybit ose mt5")
+    p.add_argument("--testnet", action="store_true", help="rrjeti i testimit i platformës (Binance, Bybit)")
     p.add_argument("--timeframe", help="p.sh. 15m, 1h, 4h, 1d")
     p.add_argument("--strategjia", dest="strategy", choices=["breakout", "score"], help="mënyra e blerjes")
     p.add_argument("--fitim", type=float, dest="take_profit_pct", help="take-profit në %% (0 = i fikur)")
@@ -25,7 +26,7 @@ def main(argv=None):
     p.add_argument("--live", action="store_true", help="tregto me para reale (kërkon çelësat API)")
     a = p.parse_args(argv)
 
-    cfg = load_config(a.config, exchange=a.exchange, timeframe=a.timeframe, candles=a.candles,
+    cfg = load_config(a.config, exchange=a.exchange, testnet=True if a.testnet else None, timeframe=a.timeframe, candles=a.candles,
                       strategy=a.strategy, take_profit_pct=a.take_profit_pct, stop_loss_pct=a.stop_loss_pct,
                       trailing_stop_pct=a.trailing_stop_pct,
                       symbols=[a.symbol] if a.symbol else None,
@@ -33,10 +34,15 @@ def main(argv=None):
 
     if a.komanda == "nis":
         if a.live:
-            if input("KUJDES: do të tregtohet me PARA REALE. Shkruaj 'PO' për të vazhduar: ").strip() != "PO":
+            what = ("urdhra në rrjetin e TESTIMIT (para demo)" if cfg.testnet else
+                    "urdhra në llogarinë e hapur në terminalin MT5 (reale ose demo)" if cfg.exchange == "mt5" else
+                    "urdhra me PARA REALE")
+            if input(f"KUJDES: roboti do të dërgojë {what} në {cfg.exchange}. "
+                     "Shkruaj 'PO' për të vazhduar: ").strip() != "PO":
                 return print("U anulua.")
-            cfg.state_file = cfg.state_file.replace(".json", "_live.json")
-            cfg.log_file = cfg.log_file.replace(".jsonl", "_live.jsonl")
+            tag = f"_{cfg.exchange}_testnet" if cfg.testnet else f"_{cfg.exchange}_live"
+            cfg.state_file = cfg.state_file.replace(".json", tag + ".json")
+            cfg.log_file = cfg.log_file.replace(".jsonl", tag + ".jsonl")
         exchange = make_exchange(cfg, with_keys=a.live)
         return run_forever(exchange, Broker(cfg, exchange if a.live else None), cfg)
 
@@ -53,7 +59,8 @@ def main(argv=None):
     elif a.komanda == "backtest":
         for sym in cfg.symbols:
             df = fetch_candles(exchange, sym, cfg.timeframe, cfg.candles)
-            print(format_backtest(backtest(df, cfg), cfg, sym), end="\n\n")
+            daily = fetch_daily(exchange, sym, cfg, df)
+            print(format_backtest(backtest(df, cfg, daily), cfg, sym), end="\n\n")
 
 
 if __name__ == "__main__":
@@ -61,3 +68,5 @@ if __name__ == "__main__":
         main()
     except KeyboardInterrupt:
         print("\nRoboti u ndal.")
+    except (RuntimeError, ValueError) as e:
+        raise SystemExit(f"Gabim: {e}")

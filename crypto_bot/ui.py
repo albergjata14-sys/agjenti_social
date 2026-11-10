@@ -5,7 +5,7 @@ import streamlit as st
 from .backtest import backtest
 from .bot import scan
 from .config import load_config
-from .data import fetch_candles, make_exchange
+from .data import fetch_candles, fetch_daily, make_exchange
 from .strategy import score_frame
 
 
@@ -15,7 +15,9 @@ def render():
                "parashikimet janë vlerësime, jo garanci.")
     base = load_config()
     c1, c2, c3 = st.columns(3)
-    exchange_name = c1.text_input("Platforma", base.exchange)
+    platforms = ["mexc", "binance", "bybit", "mt5"]
+    exchange_name = c1.selectbox("Platforma", platforms,
+                                 index=platforms.index(base.exchange) if base.exchange in platforms else 0)
     symbol = c2.text_input("Monedha", base.symbols[0])
     tfs = ["15m", "1h", "4h", "1d"]
     timeframe = c3.selectbox("Intervali", tfs, index=tfs.index(base.timeframe) if base.timeframe in tfs else 2)
@@ -58,8 +60,9 @@ def render():
                                         "Sinjali": r["signal"], "Arsyeja": r["signal_reason"]} for r in rows]),
                          width="stretch", hide_index=True)
         if b3.button("Backtest", width="stretch"):
-            df = fetch_candles(make_exchange(cfg), symbol, timeframe, max(cfg.candles, 1000))
-            r = backtest(df, cfg)
+            ex = make_exchange(cfg)
+            df = fetch_candles(ex, symbol, timeframe, max(cfg.candles, 3000))
+            r = backtest(df, cfg, fetch_daily(ex, symbol, cfg, df))
             m1, m2, m3, m4 = st.columns(4)
             m1.metric("Kthimi", f"{r['return_pct']:+.2f}%")
             m2.metric("Tregti", r["trades"])

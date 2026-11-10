@@ -5,12 +5,12 @@ import pandas as pd
 import pytest
 
 from crypto_bot.backtest import backtest
-from crypto_bot.bot import run_cycle
+from crypto_bot.bot import losses_in_row, run_cycle
 from crypto_bot.broker import Broker
 from crypto_bot.config import Config, load_config
-from crypto_bot.data import fetch_candles, top_symbols
+from crypto_bot.data import fetch_candles, make_exchange, top_symbols
 from crypto_bot.indicators import rsi
-from crypto_bot.strategy import analyze, score_frame, signal_frame
+from crypto_bot.strategy import analyze, daily_trend, position_cost, score_frame, signal_frame, stop_distance_pct
 
 
 def candles(closes, vol=100.0):
@@ -91,7 +91,7 @@ class FakeExchange:
     """Platformë e rreme: kthen qirinj të përgatitur, me kufi 100 për kërkesë."""
 
     def __init__(self, data, now_ms):
-        self.data, self.now, self.last = data, now_ms, {}
+        self.data, self.now, self.last, self.spread = data, now_ms, {}, {}
 
     def parse_timeframe(self, tf):
         return 3600
@@ -105,7 +105,9 @@ class FakeExchange:
         return [r for r in rows if r[0] >= since][:100]
 
     def fetch_ticker(self, symbol):
-        return {"last": self.last[symbol]}
+        last = self.last.get(symbol, float(self.data[symbol]["close"].iloc[-2]))
+        half = last * self.spread.get(symbol, 0.01) / 200
+        return {"last": last, "bid": last - half, "ask": last + half}
 
     def load_markets(self):
         return {s: {"spot": True, "active": True, "quote": s.split("/")[1], "base": s.split("/")[0]} for s in self.t}
@@ -143,7 +145,7 @@ def read_log(cfg):
 def test_paper_bot_buys_then_exits(tmp_path):
     cfg = Config(symbols=["BTC/USDT", "ETH/USDT"], candles=300, state_file=str(tmp_path / "s.json"),
                  log_file=str(tmp_path / "d.jsonl"), strategy="score", max_daily_loss_pct=0,
-                 take_profit_pct=4, stop_loss_pct=2, max_open_positions=1, fee_pct=0.1)
+                 risk_per_trade_pct=0, position_size_pct=10, take_profit_pct=4, stop_loss_pct=2, max_open_positions=1, fee_pct=0.1)
     ex = make_fake({"BTC/USDT": trend(400, 100, 0.002), "ETH/USDT": trend(400, 100, -0.002)})
     broker = Broker(cfg)
     actions = run_cycle(ex, broker, cfg)
@@ -169,7 +171,7 @@ def test_paper_bot_buys_then_exits(tmp_path):
 
 def test_stop_loss_and_daily_loss_halt(tmp_path):
     cfg = Config(symbols=["BTC/USDT", "ETH/USDT"], candles=300, state_file=str(tmp_path / "s.json"),
-                 log_file=str(tmp_path / "d.jsonl"), strategy="score", position_size_pct=100,
+                 log_file=str(tmp_path / "d.jsonl"), strategy="score", position_size_pct=100, risk_per_trade_pct=0,
                  stop_loss_pct=6, max_daily_loss_pct=5, max_open_positions=1)
     ex = make_fake({"BTC/USDT": trend(400, 100, 0.002), "ETH/USDT": trend(400, 100, 0.002)})
     broker = Broker(cfg)
@@ -200,7 +202,7 @@ def breakout_series():
 
 
 def test_breakout_strategy():
-    cfg = Config(fee_pct=0)  # parazgjedhja: breakout 55/20, pa take-profit, stop 8%
+    cfg = Config(fee_pct=0, daily_trend_ema=0)  # breakout 55/20, pa take-profit, stop 8%
     assert cfg.strategy == "breakout"
     closes = breakout_series()
     df = candles(closes)
@@ -221,7 +223,8 @@ def test_breakout_strategy():
 
 
 def test_trailing_stop_moves_up(tmp_path):
-    cfg = Config(state_file=str(tmp_path / "s.json"), trailing_stop_pct=3, take_profit_pct=50, stop_loss_pct=5)
+    cfg = Config(state_file=str(tmp_path / "s.json"), trailing_stop_pct=3, take_profit_pct=50, stop_loss_pct=5,
+                 risk_per_trade_pct=0)
     b = Broker(cfg)
     b.buy("BTC/USDT", 100, 1000)
     assert b.check_exit("BTC/USDT", 120) is None
@@ -244,7 +247,7 @@ class FakeLive:
     def market(self, symbol):
         return {"limits": {"cost": {"min": 10}, "amount": {"min": 0.0001}}}
 
-    def create_order(self, symbol, type_, side, qty):
+    def create_order(self, symbol, type_, side, qty, price=None, params=None):
         self.orders.append((symbol, type_, side, qty))
         price = 101.0 if side == "buy" else 110.0
         self.free += -qty * price if side == "buy" else qty * price
@@ -252,7 +255,7 @@ class FakeLive:
 
 
 def test_live_broker_sends_orders_and_uses_fill_price(tmp_path):
-    cfg = Config(state_file=str(tmp_path / "live.json"), position_size_pct=10, fee_pct=0.1, take_profit_pct=4)
+    cfg = Config(state_file=str(tmp_path / "live.json"), position_size_pct=10, risk_per_trade_pct=0, fee_pct=0.1, take_profit_pct=4)
     ex = FakeLive()
     b = Broker(cfg, ex)
     pos = b.buy("BTC/USDT", 100.0, 500.0)
@@ -265,3 +268,170 @@ def test_live_broker_sends_orders_and_uses_fill_price(tmp_path):
     # Skedari i gjendjes reale nuk mund të hapet në simulim.
     with pytest.raises(RuntimeError):
         Broker(cfg)
+
+
+def test_daily_trend_uses_only_closed_days():
+    cfg = Config(daily_trend_ema=3)
+    idx = pd.date_range("2025-01-01", periods=10, freq="D", tz="UTC")
+    #            d0   d1   d2   d3   d4   d5   d6   d7   d8   d9
+    daily = pd.DataFrame({"close": [100, 100, 100, 100, 120, 121, 122, 90, 89, 88]}, index=idx)
+    h4 = pd.date_range("2025-01-01", periods=60, freq="4h", tz="UTC")
+    df = pd.DataFrame({"close": 1.0}, index=h4)
+    up = daily_trend(df, cfg, daily)
+    # Dita 4 (rritja) mbyllet në mesnatën e ditës 5: qiriri 20:00–24:00 i ditës 4 e sheh i pari.
+    assert not up[pd.Timestamp("2025-01-05 16:00", tz="UTC")]
+    assert up[pd.Timestamp("2025-01-05 20:00", tz="UTC")]
+    # Rënia e ditës 7 njihet vetëm kur ajo ditë mbyllet.
+    assert up[pd.Timestamp("2025-01-08 16:00", tz="UTC")]
+    assert not up[pd.Timestamp("2025-01-08 20:00", tz="UTC")]
+    # Pa qirinj ditorë të dhënë, ditët nxirren nga vetë qirinjtë; i fikur → gjithmonë True.
+    assert daily_trend(candles(trend(600, 100, 0.002)), cfg).iloc[-1]
+    assert not daily_trend(candles(trend(600, 100, -0.002)), cfg).iloc[-1]
+    assert daily_trend(df, Config(daily_trend_ema=0)).all()
+    # Filtri ndalon blerjet e breakout-it kur trendi ditor nuk njihet si rritës.
+    b = candles(breakout_series())
+    assert signal_frame(b, Config(daily_trend_ema=0))["buy"].any()
+    assert not signal_frame(b, Config(daily_trend_ema=50))["buy"].any()
+    assert "trendi ditor" in analyze(b.iloc[:322], Config(daily_trend_ema=50))["signal_reason"]
+
+
+def test_risk_based_sizing_and_atr_stop(tmp_path):
+    # Rrezik 1% me stop 8% → 12.5% e kapitalit; me stop 2% do të ishte 50%, por kufiri është 25%.
+    assert position_cost(Config(), 1000, 8) == pytest.approx(125)
+    assert position_cost(Config(), 1000, 2) == pytest.approx(250)
+    assert position_cost(Config(risk_per_trade_pct=0, position_size_pct=10), 1000, 8) == pytest.approx(100)
+    assert stop_distance_pct(Config(), 100, 3) == 8
+    assert stop_distance_pct(Config(stop_loss_atr=1.5), 100, 3) == pytest.approx(4.5)
+
+    cfg = Config(state_file=str(tmp_path / "s.json"), stop_loss_atr=1.5, fee_pct=0)
+    b = Broker(cfg)
+    pos = b.buy("BTC/USDT", 100, 1000, stop_pct=4.5)
+    assert pos["sl"] == pytest.approx(95.5) and pos["cost"] == pytest.approx(1000 * 1 / 4.5)
+    # Nëse preket stop-i, humbja është 1% e kapitalit.
+    assert b.sell("BTC/USDT", 95.5, "stop-loss")["pnl"] == pytest.approx(-10)
+
+    a = analyze(candles(breakout_series()).iloc[:322], Config(stop_loss_atr=2, daily_trend_ema=0))
+    assert a["plan"]["stop_pct"] == pytest.approx(2 * a["indicators"]["atr"] / a["price"] * 100)
+
+
+def test_spread_filter_and_losing_streak(tmp_path):
+    cfg = Config(symbols=["BTC/USDT"], candles=300, state_file=str(tmp_path / "s.json"),
+                 log_file=str(tmp_path / "d.jsonl"), strategy="score", max_spread_pct=0.5)
+    ex = make_fake({"BTC/USDT": trend(400, 100, 0.002)})
+    ex.spread["BTC/USDT"] = 2.0
+    broker = Broker(cfg)
+    assert run_cycle(ex, broker, cfg) == []
+    assert "diferenca" in read_log(cfg)[-1]["reason"]
+    ex.spread["BTC/USDT"] = 0.1
+    assert [a[0] for a in run_cycle(ex, broker, cfg)] == ["BLI"]
+
+    now = pd.Timestamp.now(tz="UTC")
+    today, ts = now.strftime("%Y-%m-%d"), now.timestamp()
+    lose, win = {"closed": ts, "pnl": -1.0}, {"closed": ts, "pnl": 2.0}
+    assert losses_in_row([win, lose, lose, lose], today) == 3
+    assert losses_in_row([lose, lose, win, lose], today) == 1
+    assert losses_in_row([{"closed": ts - 2 * 86400, "pnl": -1.0}] * 3, today) == 0
+    # Tre humbje radhazi sot → asnjë blerje e re.
+    cfg2 = Config(**{**cfg.__dict__, "state_file": str(tmp_path / "s2.json")})
+    b2 = Broker(cfg2)
+    b2.state["trades"] = [lose, lose, lose]
+    assert run_cycle(ex, b2, cfg2) == [] and "humbje radhazi" in read_log(cfg2)[-1]["reason"]
+
+
+def test_make_exchange_platforms():
+    for name in ("mexc", "binance", "bybit"):
+        ex = make_exchange(Config(exchange=name))
+        assert ex.id == name and ex.options["defaultType"] == "spot"
+    # Rrjeti i testimit: Binance dhe Bybit e kanë, MEXC jo.
+    assert "testnet" in make_exchange(Config(exchange="binance", testnet=True)).urls["api"]["public"]
+    assert "testnet" in str(make_exchange(Config(exchange="bybit", testnet=True)).urls["api"])
+    with pytest.raises(ValueError):
+        make_exchange(Config(exchange="mexc", testnet=True))
+    with pytest.raises(ValueError):
+        make_exchange(Config(exchange="nuk-ekziston"))
+
+
+class FakeMT5:
+    """Modul i rremë MetaTrader5 me një simbol BTCUSD (1 lot = 1 BTC, hapi 0.01)."""
+    TIMEFRAME_H4, TIMEFRAME_D1 = "H4", "D1"
+    TRADE_ACTION_DEAL, ORDER_TYPE_BUY, ORDER_TYPE_SELL = 1, 0, 1
+    ORDER_TIME_GTC, ORDER_FILLING_FOK, ORDER_FILLING_IOC, ORDER_FILLING_RETURN = 0, 0, 1, 2
+    TRADE_RETCODE_DONE = 10009
+
+    def __init__(self, df):
+        from types import SimpleNamespace as NS
+        self.NS, self.df, self.requests, self.open = NS, df, [], []
+        self.info = NS(name="BTCUSD", visible=True, trade_contract_size=1.0, volume_step=0.01, volume_min=0.01,
+                       digits=2, filling_mode=2, currency_base="BTC", currency_profit="USD")
+        self.bid, self.ask = 99.95, 100.05
+
+    def initialize(self, **kw):
+        return True
+
+    def last_error(self):
+        return (0, "ok")
+
+    def symbol_info(self, symbol):
+        return self.info if symbol == "BTCUSD" else None
+
+    def symbol_select(self, symbol, on):
+        return True
+
+    def symbols_get(self):
+        return [self.info]
+
+    def symbol_info_tick(self, symbol):
+        return self.NS(bid=self.bid, ask=self.ask, last=0.0)
+
+    def copy_rates_from_pos(self, symbol, tf, start, count):
+        d = self.df.iloc[: len(self.df) - start].tail(count)
+        return [{"time": int(t.timestamp()), "open": r.open, "high": r.high, "low": r.low, "close": r.close,
+                 "tick_volume": r.volume} for t, r in zip(d.index, d.itertuples())]
+
+    def account_info(self):
+        return self.NS(currency="USD", margin_free=1000.0, equity=1000.0)
+
+    def positions_get(self, symbol=None):
+        return list(self.open)
+
+    def order_send(self, req):
+        self.requests.append(req)
+        if req["type"] == self.ORDER_TYPE_BUY:
+            self.open.append(self.NS(ticket=7, volume=req["volume"], magic=req["magic"]))
+        else:
+            self.open = [p for p in self.open if p.ticket != req["position"]]
+        return self.NS(retcode=self.TRADE_RETCODE_DONE, price=req["price"], volume=req["volume"], order=1, comment="")
+
+
+def test_mt5_adapter(tmp_path):
+    from crypto_bot.mt5 import MAGIC, MT5Exchange
+
+    df = candles(trend(400, 100, 0.002))
+    fake = FakeMT5(df)
+    ex = MT5Exchange(fake)
+    got = fetch_candles(ex, "BTCUSD", "4h", 300)
+    assert len(got) == 300 and got.index[-1] == df.index[-2]      # qiriri i hapur anashkalohet
+    assert got["close"].iloc[-1] == pytest.approx(df["close"].iloc[-2])
+    assert top_symbols(ex, "USD", 5) == ["BTCUSD"]
+    with pytest.raises(ValueError):
+        ex.fetch_ticker("NUKKA")
+
+    cfg = Config(exchange="mt5", quote="USD", state_file=str(tmp_path / "mt5.json"), fee_pct=0)
+    b = Broker(cfg, ex)
+    pos = b.buy("BTCUSD", 100.0, 1000.0)                          # 1% rrezik / 8% stop = 125 USD → 1.25 lote
+    buy = fake.requests[0]
+    assert buy["volume"] == pytest.approx(1.25) and buy["price"] == 100.05 and buy["magic"] == MAGIC
+    assert buy["sl"] == pytest.approx(92.0)                       # stop-i vendoset edhe në server
+    assert pos["qty"] == pytest.approx(1.25) and pos["entry"] == 100.05
+    fake.bid = 110.0
+    t = b.sell("BTCUSD", 110.0, "sinjal")
+    assert fake.requests[1]["position"] == 7 and fake.requests[1]["volume"] == pytest.approx(1.25)
+    assert t["pnl"] == pytest.approx(1.25 * (110.0 - 100.05)) and not fake.open
+    # Nëse stop-i në server e ka mbyllur tashmë pozicionin, roboti nuk dërgon urdhër të dytë.
+    b.buy("BTCUSD", 100.0, 1000.0)
+    fake.open.clear()
+    b.sell("BTCUSD", 92.0, "stop-loss")
+    assert len(fake.requests) == 3
+    # Sasi nën minimumin e brokerit nuk blihet.
+    assert Broker(Config(**{**cfg.__dict__, "state_file": str(tmp_path / "m2.json"), "position_size_pct": 0.01}),
+                  ex).buy("BTCUSD", 100.0, 1000.0) is None

@@ -34,16 +34,50 @@ def score_frame(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
-def signal_frame(df: pd.DataFrame, cfg) -> pd.DataFrame:
+def daily_trend(df: pd.DataFrame, cfg, daily=None) -> pd.Series:
+    """True aty ku mbyllja ditore është mbi EMA ditore. Përdoren vetëm ditë të mbyllura.
+
+    `daily` janë qirinjtë ditorë; pa to, ditët nxirren nga vetë `df`.
+    """
+    step = df.index.to_series().diff().median()
+    if not cfg.daily_trend_ema or step >= pd.Timedelta(days=1):
+        return pd.Series(True, index=df.index)
+    if daily is None:
+        daily = df[["close"]].resample("1D").last().dropna()
+    d = daily["close"]
+    n = cfg.daily_trend_ema
+    up = d > d.ewm(span=n, adjust=False, min_periods=n).mean()   # pa histori të mjaftueshme → False
+    up.index = up.index + pd.Timedelta(days=1)                    # dita njihet vetëm pasi mbyllet
+    known = up.reindex(df.index + step, method="ffill")           # krahaso me çastin e mbylljes së qiririt
+    return pd.Series(known.fillna(False).to_numpy(dtype=bool), index=df.index)
+
+
+def stop_distance_pct(cfg, price: float, atr: float) -> float:
+    """Largësia e stop-loss nga hyrja, në %: sipas ATR nëse është vendosur, përndryshe përqindje fikse."""
+    if cfg.stop_loss_atr and atr and not np.isnan(atr):
+        return min(cfg.stop_loss_atr * atr / price * 100, 99.0)
+    return cfg.stop_loss_pct
+
+
+def position_cost(cfg, equity: float, stop_pct: float) -> float:
+    """Sa para vihen në një blerje: rrezik fiks i kapitalit, i kufizuar nga position_size_pct."""
+    cap = equity * cfg.position_size_pct / 100
+    if cfg.risk_per_trade_pct and stop_pct > 0:
+        return min(equity * cfg.risk_per_trade_pct / stop_pct, cap)
+    return cap
+
+
+def signal_frame(df: pd.DataFrame, cfg, daily=None) -> pd.DataFrame:
     """score_frame + kolonat `buy` / `sell` sipas strategjisë së zgjedhur te konfigurimi."""
     s = score_frame(df)
+    s["daily_up"] = daily_trend(df, cfg, daily)
     c = s["close"]
     # Niveli i thyerjes: maja / fundi i qirinjve të mëparshëm (pa qiririn aktual).
     s["breakout_high"] = s["high"].rolling(cfg.breakout_entry).max().shift()
     s["breakout_low"] = s["low"].rolling(cfg.breakout_exit).min().shift()
     s["trend_ema"] = c.ewm(span=cfg.trend_ema, adjust=False, min_periods=cfg.trend_ema).mean()
     if cfg.strategy == "breakout":
-        s["buy"] = (c > s["breakout_high"]) & (c > s["trend_ema"])
+        s["buy"] = (c > s["breakout_high"]) & (c > s["trend_ema"]) & s["daily_up"]
         s["sell"] = c < s["breakout_low"]
     else:
         s["buy"] = s["score"] >= cfg.buy_threshold
@@ -56,12 +90,12 @@ def warmup(cfg) -> int:
     return max(WARMUP, cfg.trend_ema, cfg.breakout_entry + 1, cfg.breakout_exit + 1)
 
 
-def analyze(df: pd.DataFrame, cfg, symbol: str = "", horizon: int = 12) -> dict:
+def analyze(df: pd.DataFrame, cfg, symbol: str = "", horizon: int = 12, daily=None) -> dict:
     """Analizë e plotë e qiririt të fundit të mbyllur + parashikim për `horizon` qirinj."""
     need = warmup(cfg) + 5
     if len(df) < need:
         raise ValueError(f"Duhen të paktën {need} qirinj, u morën {len(df)}")
-    s = signal_frame(df, cfg)
+    s = signal_frame(df, cfg, daily)
     last = s.iloc[-1]
     price, a = float(last["close"]), float(last["atr"])
     score = float(last["score"])
@@ -74,6 +108,9 @@ def analyze(df: pd.DataFrame, cfg, symbol: str = "", horizon: int = 12) -> dict:
                if signal == "SHIT" else
                f"pa thyerje: duhet mbyllje mbi {last['breakout_high']:.6g}"
                + ("" if up else f" dhe mbi EMA{cfg.trend_ema} ({last['trend_ema']:.6g})"))
+        if signal != "SHIT" and not last["daily_up"]:
+            why = (f"trendi ditor nuk është rritës (çmimi nën EMA{cfg.daily_trend_ema} ditore, "
+                   f"ose histori ditore e pamjaftueshme); {why}" if signal == "PRIT" else why)
     else:
         why = f"pikët {score:+.0f} (blerje ≥ {cfg.buy_threshold:g}, shitje ≤ {cfg.sell_threshold:g})"
     recent = s.tail(50)
@@ -93,6 +130,7 @@ def analyze(df: pd.DataFrame, cfg, symbol: str = "", horizon: int = 12) -> dict:
         return txt[0] if v > 0.2 else txt[1] if v < -0.2 else txt[2]
 
     components = {k: float(last[f"c_{k}"]) for k in WEIGHTS}
+    stop_pct = stop_distance_pct(cfg, price, a)
     return {
         "symbol": symbol,
         "time": str(s.index[-1]),
@@ -120,7 +158,9 @@ def analyze(df: pd.DataFrame, cfg, symbol: str = "", horizon: int = 12) -> dict:
         "plan": {
             "entry": price,
             "take_profit": price * (1 + cfg.take_profit_pct / 100) if cfg.take_profit_pct else None,
-            "stop_loss": price * (1 - cfg.stop_loss_pct / 100),
+            "stop_loss": price * (1 - stop_pct / 100),
+            "stop_pct": stop_pct,
+            "position_pct": position_cost(cfg, 100.0, stop_pct),
             "exit_level": float(last["breakout_low"]) if cfg.strategy == "breakout" else None,
         },
     }
@@ -138,10 +178,12 @@ def format_report(a: dict, cfg) -> str:
         f"Mbështetja: {a['support']:.6g}   Rezistenca: {a['resistance']:.6g}",
         f"Parashikimi për {f['horizon_candles']} qirinjtë e ardhshëm: ~{f['expected']:.6g} "
         f"(brezi {f['low']:.6g} – {f['high']:.6g}, luhatshmëria {f['volatility_pct']:.2f}%/qiri)",
-        "Plani: hyrje {:.6g} | fitim {} | humbje −{:g}% → {:.6g}{}".format(
+        "Plani: hyrje {:.6g} | fitim {} | humbje −{:.3g}% → {:.6g}{}".format(
             p["entry"],
             f"+{cfg.take_profit_pct:g}% → {p['take_profit']:.6g}" if p["take_profit"] else "i hapur (pa kufi)",
-            cfg.stop_loss_pct, p["stop_loss"],
+            p["stop_pct"], p["stop_loss"],
             f" | dalje nga trendi nën {p['exit_level']:.6g}" if p["exit_level"] else ""),
+        f"Madhësia e blerjes: {p['position_pct']:.3g}% e kapitalit"
+        + (f" (rrezik {cfg.risk_per_trade_pct:g}% e kapitalit nëse preket stop-i)" if cfg.risk_per_trade_pct else ""),
     ]
     return "\n".join(lines)
