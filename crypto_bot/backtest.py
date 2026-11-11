@@ -15,6 +15,9 @@ def backtest(df, cfg, daily=None) -> dict:
     trades, equity = [], []
     o, h, l, c, buy, sell, short, cover = (s[k].to_numpy() for k in
                                            ["open", "high", "low", "close", "buy", "sell", "short", "cover"])
+    sig_stop, sig_target = s["stop_price"].to_numpy(float), s["target_price"].to_numpy(float)
+    days = s.index.strftime("%Y-%m-%d").to_numpy()
+    entries_today, today = 0, None
 
     def value(price):
         # Vlera e pozicionit: long = sasia × çmimi; short = marzhi + fitimi nga rënia.
@@ -27,20 +30,32 @@ def backtest(df, cfg, daily=None) -> dict:
         trades.append({"entry_time": str(s.index[pos["i"]]), "exit_time": str(s.index[i]),
                        "side": "long" if pos["side"] > 0 else "short",
                        "entry": pos["entry"], "exit": price, "reason": reason,
-                       "pnl": proceeds - pos["cost"], "pnl_pct": (proceeds / pos["cost"] - 1) * 100})
+                       "pnl": proceeds - pos["cost"], "pnl_pct": (proceeds / pos["cost"] - 1) * 100,
+                       "r": (proceeds - pos["cost"]) / pos["risk"] if pos["risk"] else 0.0})
         pos = None
 
     for i in range(start_i, len(s)):
         if pos is not None and (sell[i - 1] if pos["side"] > 0 else cover[i - 1]):
             close(i, o[i], "sinjal")
-        if pos is None and (buy[i - 1] or short[i - 1]):
+        if days[i] != today:
+            today, entries_today = days[i], 0
+        if (pos is None and (buy[i - 1] or short[i - 1])
+                and not (cfg.max_trades_per_day and entries_today >= cfg.max_trades_per_day)):
             side = 1 if buy[i - 1] else -1
             stop_pct = stop_distance_pct(cfg, o[i], atr[i - 1])
-            cost = position_cost(cfg, cash, stop_pct)
             sl, tp = exit_prices(cfg, o[i], stop_pct, side)
-            pos = {"i": i, "side": side, "entry": o[i], "qty": cost * (1 - fee) / o[i], "cost": cost,
-                   "best": o[i], "sl": sl, "tp": tp}
-            cash -= cost
+            ok = True
+            if not np.isnan(sig_stop[i - 1]):     # stop dhe objektiv i vetë sinjalit
+                sl, tp = sig_stop[i - 1], sig_target[i - 1]
+                # Nëse hapja ka kërcyer përtej stop-it ose objektivit, sinjali nuk vlen më.
+                ok = (sl < o[i] < tp) if side > 0 else (tp < o[i] < sl)
+                stop_pct = abs(o[i] - sl) / o[i] * 100
+            if ok:
+                cost = position_cost(cfg, cash, stop_pct)
+                pos = {"i": i, "side": side, "entry": o[i], "qty": cost * (1 - fee) / o[i], "cost": cost,
+                       "best": o[i], "sl": sl, "tp": tp, "risk": cost * (1 - fee) * stop_pct / 100}
+                cash -= cost
+                entries_today += 1
         if pos is not None:
             # Nëse i njëjti qiri prek edhe stop-in edhe fitimin, supozohet rasti më i keq (stop).
             long = pos["side"] > 0
@@ -75,6 +90,10 @@ def backtest(df, cfg, daily=None) -> dict:
         "win_rate_pct": len(wins) / len(trades) * 100 if trades else 0.0,
         "profit_factor": gross_win / gross_loss if gross_loss else float("inf") if gross_win else 0.0,
         "max_drawdown_pct": float(((peak - eq) / peak).max() * 100),
+        # R = fitimi i tregtisë pjesëtuar me rrezikun e saj (largësia deri te stop-i): mat strategjinë
+        # pavarësisht madhësisë së pozicionit.
+        "avg_r": float(np.mean([t["r"] for t in trades])) if trades else 0.0,
+        "total_r": float(np.sum([t["r"] for t in trades])) if trades else 0.0,
         "trade_list": trades, "equity": eq.tolist(),
     }
 
@@ -88,4 +107,5 @@ def format_backtest(r: dict, cfg, symbol: str) -> str:
         f"Mbajtja pa tregtuar (buy & hold) për krahasim: {r['buy_hold_pct']:+.2f}% e çmimit",
         f"Tregti: {r['trades']} | fituese: {r['wins']} ({r['win_rate_pct']:.1f}%) | "
         f"faktori i fitimit: {r['profit_factor']:.2f} | rënia maksimale: {r['max_drawdown_pct']:.2f}%",
+        f"Në njësi rreziku (R): mesatarisht {r['avg_r']:+.2f}R për tregti, gjithsej {r['total_r']:+.1f}R",
     ])

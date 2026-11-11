@@ -45,6 +45,8 @@ def connect(cfg, with_keys: bool = False):
     exchange = make_exchange(cfg, with_keys)
     if hasattr(exchange, "account_currency"):
         cfg.quote = exchange.account_currency()
+    if cfg.data_tz == "auto":   # bursat japin kohën në UTC; MT5 në orën e serverit të brokerit
+        cfg.data_tz = exchange.server_tz(cfg.symbols[0]) if hasattr(exchange, "server_tz") else "UTC"
     return exchange
 
 
@@ -79,9 +81,10 @@ def fetch_candles(exchange, symbol: str, timeframe: str, limit: int, closed_only
 
 def fetch_daily(exchange, symbol: str, cfg, df: pd.DataFrame):
     """Qirinjtë ditorë për filtrin e trendit ditor, sa për të mbuluar gjithë `df`. None nëse s'duhen."""
-    if not cfg.daily_trend_ema or exchange.parse_timeframe(cfg.timeframe) >= 86400 or df.empty:
+    engulf = cfg.strategy == "engulf"     # engulf përdor ditoret për bias-in dhe reversal areas
+    if not (cfg.daily_trend_ema or engulf) or exchange.parse_timeframe(cfg.timeframe) >= 86400 or df.empty:
         return None
-    days = (df.index[-1] - df.index[0]).days + 3 * cfg.daily_trend_ema + 5
+    days = (df.index[-1] - df.index[0]).days + max(3 * cfg.daily_trend_ema, cfg.engulf_swing_lookback_days + 30) + 5
     return fetch_candles(exchange, symbol, "1d", days)
 
 

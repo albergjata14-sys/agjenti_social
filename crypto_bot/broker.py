@@ -44,14 +44,20 @@ class Broker:
     def equity(self, prices: dict) -> float:
         return self.cash() + sum(self.value(p, prices.get(s, p["entry"])) for s, p in self.positions.items())
 
-    def buy(self, symbol: str, price: float, equity: float, stop_pct: float = None, side: int = 1):
+    def buy(self, symbol: str, price: float, equity: float, stop_pct: float = None, side: int = 1,
+            stop_price: float = None, take_price: float = None):
         """Hap një pozicion sipas rrezikut të lejuar. Kthen pozicionin ose None nëse s'ka fonde.
 
         `stop_pct` është largësia e stop-loss nga hyrja në % (parazgjedhur stop_loss_pct).
         `side`: 1 = blerje (long), −1 = shitje short (fitim kur çmimi bie).
+        `stop_price` / `take_price`: nivele të sakta nga sinjali (zëvendësojnë përqindjet).
         """
         cfg, fee = self.cfg, self.cfg.fee_pct / 100
         stop_pct = stop_pct or cfg.stop_loss_pct
+        levels = exit_prices(cfg, price, stop_pct, side)
+        if stop_price:
+            levels = (stop_price, take_price)
+            stop_pct = abs(price - stop_price) / price * 100
         cost = min(position_cost(cfg, equity, stop_pct), self.cash())
         if cost <= 0 or symbol in self.positions:
             return None
@@ -64,7 +70,7 @@ class Broker:
             if qty <= 0 or cost < (limits.get("cost", {}).get("min") or 0) or qty < (limits.get("amount", {}).get("min") or 0):
                 return None
             # Platformat që e mbështesin (MT5) e vendosin stop-in edhe në server.
-            params = {"stopLossPrice": exit_prices(cfg, price, stop_pct, side)[0]} if server_stop else {}
+            params = {"stopLossPrice": levels[0]} if server_stop else {}
             order = self.exchange.create_order(symbol, "market", "buy" if side > 0 else "sell", qty, None, params)
             order = self._settled(order, symbol)
             qty = float(order.get("filled") or qty)
@@ -77,7 +83,7 @@ class Broker:
         else:
             qty = cost * (1 - fee) / price
             self.state["cash"] -= cost
-        sl, tp = exit_prices(cfg, price, stop_pct, side)
+        sl, tp = levels if stop_price else exit_prices(cfg, price, stop_pct, side)
         pos = {"side": side, "qty": qty, "entry": price, "cost": cost, "high": price, "opened": time.time(),
                "sl": sl, "tp": tp}
         self.positions[symbol] = pos

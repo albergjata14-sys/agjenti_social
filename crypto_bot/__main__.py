@@ -24,7 +24,7 @@ def main(argv=None):
     p.add_argument("--exchange", help="mexc, binance, bybit ose mt5")
     p.add_argument("--testnet", action="store_true", help="rrjeti i testimit i platformës (Binance, Bybit)")
     p.add_argument("--timeframe", help="p.sh. 15m, 1h, 4h, 1d")
-    p.add_argument("--strategjia", dest="strategy", choices=["breakout", "score"], help="mënyra e blerjes")
+    p.add_argument("--strategjia", dest="strategy", choices=["breakout", "score", "engulf"], help="strategjia")
     p.add_argument("--fitim", type=float, dest="take_profit_pct", help="take-profit në %% (0 = i fikur)")
     p.add_argument("--humbje", type=float, dest="stop_loss_pct", help="stop-loss në %%")
     p.add_argument("--trailing", type=float, dest="trailing_stop_pct", help="trailing stop në %%")

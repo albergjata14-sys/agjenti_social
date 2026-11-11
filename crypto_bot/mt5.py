@@ -79,6 +79,20 @@ class MT5Exchange:
         # MT5 nuk jep volum 24-orësh të krahasueshëm: të gjitha simbolet trajtohen njësoj.
         return {name: {"quoteVolume": 1.0} for name in self.load_markets()}
 
+    def server_tz(self, symbol: str) -> str:
+        """Zona orare e serverit të brokerit, e nxjerrë nga ora e çmimit të fundit kundrejt orës reale.
+
+        Shumica e brokerëve MT5 përdorin orën e Evropës Lindore (UTC+2 në dimër, +3 në verë), që ndërron
+        në të njëjtat data me orën e Mbretërisë së Bashkuar. Nëse tregu është i mbyllur (çmim i vjetër),
+        supozohet kjo zonë. Mund të vendoset me dorë me `data_tz` te konfigurimi.
+        """
+        offset = round((self.mt5.symbol_info_tick(symbol).time - time.time()) / 3600)
+        if offset == 0:
+            return "UTC"
+        if offset in (2, 3) or abs(offset) > 14:
+            return "Europe/Athens"
+        return f"Etc/GMT{-offset:+d}"
+
     # --- llogaria dhe urdhrat -----------------------------------------------
     def account_currency(self) -> str:
         a = self.mt5.account_info()

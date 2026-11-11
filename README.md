@@ -49,7 +49,8 @@ E njëjta analizë, skanim dhe backtest gjenden edhe te paneli **Crypto Trading 
 
 | Çelësi | Kuptimi |
 |---|---|
-| `strategy` | `breakout` (parazgjedhur) ose `score` – shih më poshtë |
+| `strategy` | `breakout` (parazgjedhur), `score` ose `engulf` – shih më poshtë |
+| `max_trades_per_day` | numri maksimal i hyrjeve në ditë (0 = pa kufi) |
 | `breakout_entry` / `breakout_exit` / `trend_ema` | bli mbi majën e 55 qirinjve, shit nën fundin e 20 qirinjve, vetëm mbi EMA200 |
 | `daily_trend_ema` | bli vetëm kur çmimi ditor është mbi EMA50 ditore (0 = i fikur) |
 | `allow_short` | lejo edhe shitje short (fitim kur çmimi bie); vetëm në MT5 ose në simulim (parazgjedhur `false`) |
@@ -88,6 +89,44 @@ planin hyrje / fitim / stop. Roboti tregton pa levë.
 mbyllet nën fundin e 55 qirinjve, nën EMA200 dhe me trend ditor rënës; e mbyll kur çmimi mbyllet mbi
 majën e 20 qirinjve ose kur preket stop-loss (që është sipër hyrjes). Punon në simulim në çdo platformë
 dhe me urdhra në MT5; tregu spot i MEXC, Binance dhe Bybit nuk e lejon me urdhra realë.
+
+### Strategjia `engulf` (eksperimentale)
+
+Rregulla të qarta, pa AI: bias ditor nga engulf-i i fundit ditor, sesioni aziatik 01:00–05:00 ora UK
+(GMT/BST automatikisht), marrje (sweep) e fundit/majës së sesionit dhe hyrje me engulf të konfirmuar në
+intervalin e hyrjes (15m). Stop-i vendoset përtej swing-ut të marrjes, objektivi te high/low i ditës së
+mëparshme ose swing-u ditor pasues. Madhësia del nga rreziku dhe largësia e stop-it.
+
+```bash
+python -m crypto_bot backtest --exchange mt5 --symbol EURUSD --strategjia engulf --timeframe 15m --short --candles 30000
+```
+
+Për të kufizuar hyrjet vendos `"max_trades_per_day": 2` te `config.json`. Ora e serverit të MT5 njihet
+vetë; mund të vendoset me dorë me `data_tz`.
+
+Çfarë është interpretim (rregullat origjinale nuk e përcaktojnë saktë; secila ka parametër `engulf_*`
+te `crypto_bot/config.py`): brenda sa qirinjve konfirmohet një engulf, sa zgjat bias-i ditor, si
+përkufizohet swing-u ditor, çfarë është "thyerje strukture", hapësira e stop-it, raporti minimal
+fitim/rrezik dhe ora e fundit e hyrjeve. Hyrja bëhet në konfirmimin e engulf-it, jo në rikthimin te zona.
+
+Çfarë **nuk** është ndërtuar: hyrja "injection" (varet nga gjykim vizual), përdorimi i zonave engulf
+kundërshtare H4/H1 si pengesa, kushti "trendy" për 50% (ka vetëm çelësin `engulf_use_mid`), dhe leva
+(roboti tregton pa levë, ndaj me stop të ngushtë rreziku real për tregti del më i vogël se 1%).
+
+Rezultati në prova (15m, janar–nëntor 2026, të dhëna MEXC, me short; R = fitimi pjesëtuar me rrezikun):
+
+| Tregu | Tregti | Fituese | Mesatarja me kosto 0.01% | Mesatarja me komision 0.1% |
+|---|---|---|---|---|
+| EUR/USDT | 114 | 29% | −0.14R | −2.76R |
+| BTC/USDT | 160 | 24% | −0.18R | −0.62R |
+| ETH/USDT | 160 | 26% | −0.11R | −0.45R |
+| SOL/USDT | 176 | 24% | −0.12R | −0.42R |
+| XRP/USDT | 123 | 24% | −0.17R | −0.47R |
+| Ari (PAXG) | 166 | 21% | −0.14R | −1.24R |
+
+Humbi në të gjashtë tregjet dhe në të gjitha variantet e provuara (vetëm engulf i fortë, pa vazhdim,
+raport minimal 2, me bias neutral). EUR/USDT në MEXC është vetëm një përafrim i EURUSD; prova e duhur
+bëhet me të dhënat e brokerit në MT5.
 
 ### Çfarë treguan provat (MEXC, nëntor 2026)
 

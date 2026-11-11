@@ -81,7 +81,15 @@ def signal_frame(df: pd.DataFrame, cfg, daily=None) -> pd.DataFrame:
     s["short_low"] = s["low"].rolling(cfg.breakout_entry).min().shift()
     s["cover_high"] = s["high"].rolling(cfg.breakout_exit).max().shift()
     s["daily_down"] = daily_trend(df, cfg, daily, down=True)
-    if cfg.strategy == "breakout":
+    s["stop_price"] = s["target_price"] = np.nan   # stop/objektiv i vetë sinjalit (vetëm engulf)
+    if cfg.strategy == "engulf":
+        from .engulf import engulf_signals
+
+        e = engulf_signals(s, cfg, daily)
+        for col in e:
+            s[col] = e[col]
+        s["sell"] = s["cover"] = False                # dalja bëhet vetëm me stop ose objektiv
+    elif cfg.strategy == "breakout":
         s["buy"] = (c > s["breakout_high"]) & (c > s["trend_ema"]) & s["daily_up"]
         s["sell"] = c < s["breakout_low"]
         s["short"] = (c < s["short_low"]) & (c < s["trend_ema"]) & s["daily_down"]
@@ -118,7 +126,9 @@ def analyze(df: pd.DataFrame, cfg, symbol: str = "", horizon: int = 12, daily=No
     score = float(last["score"])
     signal = "BLI" if last["buy"] else "SHORT" if last["short"] else "SHIT" if last["sell"] else "PRIT"
     side = -1 if signal == "SHORT" else 1
-    if signal == "SHORT":
+    if cfg.strategy == "engulf":
+        why = last["engulf_note"] or "pa sinjal"
+    elif signal == "SHORT":
         why = (f"çmimi theu fundin e {cfg.breakout_entry} qirinjve ({last['short_low']:.6g}) në trend rënës"
                if cfg.strategy == "breakout" else f"pikët {score:+.0f} (shitje ≤ {cfg.sell_threshold:g})")
     elif cfg.strategy == "breakout":
@@ -151,6 +161,16 @@ def analyze(df: pd.DataFrame, cfg, symbol: str = "", horizon: int = 12, daily=No
 
     components = {k: float(last[f"c_{k}"]) for k in WEIGHTS}
     stop_pct = stop_distance_pct(cfg, price, a)
+    plan_stop, plan_take = exit_prices(cfg, price, stop_pct, side)
+    if not np.isnan(last["stop_price"]):              # sinjali sjell stop-in dhe objektivin e vet
+        plan_stop, plan_take = float(last["stop_price"]), float(last["target_price"])
+        stop_pct = abs(price - plan_stop) / price * 100
+    engulf = None
+    if cfg.strategy == "engulf":
+        num = lambda x: None if np.isnan(x) else float(x)
+        engulf = {"bias": int(last["bias"]), "session_high": num(last["sess_high"]), "session_low": num(last["sess_low"]),
+                  "session_mid": num(last["sess_mid"]), "swept_low": bool(last["swept_low"]),
+                  "swept_high": bool(last["swept_high"])}
     return {
         "symbol": symbol,
         "time": str(s.index[-1]),
@@ -163,6 +183,7 @@ def analyze(df: pd.DataFrame, cfg, symbol: str = "", horizon: int = 12, daily=No
         "short_below": float(min(last["short_low"], last["trend_ema"])),     # mbyllja që do të jepte short
         "daily_up": bool(last["daily_up"]),
         "daily_down": bool(last["daily_down"]),
+        "engulf": engulf,
         "exit_long": bool(last["sell"]),      # pozicioni long duhet mbyllur
         "exit_short": bool(last["cover"]),    # pozicioni short duhet mbyllur
         "side": side,
@@ -184,8 +205,8 @@ def analyze(df: pd.DataFrame, cfg, symbol: str = "", horizon: int = 12, daily=No
         },
         "plan": {
             "entry": price,
-            "take_profit": exit_prices(cfg, price, stop_pct, side)[1],
-            "stop_loss": exit_prices(cfg, price, stop_pct, side)[0],
+            "take_profit": plan_take,
+            "stop_loss": plan_stop,
             "stop_pct": stop_pct,
             "position_pct": position_cost(cfg, 100.0, stop_pct),
             "exit_level": (float(last["cover_high"] if side < 0 else last["breakout_low"])
@@ -208,7 +229,7 @@ def format_report(a: dict, cfg) -> str:
         f"(brezi {f['low']:.6g} – {f['high']:.6g}, luhatshmëria {f['volatility_pct']:.2f}%/qiri)",
         "Plani{}: hyrje {:.6g} | fitim {} | humbje −{:.3g}% → {:.6g}{}".format(
             " (short)" if a["side"] < 0 else "", p["entry"],
-            f"{cfg.take_profit_pct:g}% → {p['take_profit']:.6g}" if p["take_profit"] else "i hapur (pa kufi)",
+            f"{p['take_profit']:.6g}" if p["take_profit"] else "i hapur (pa kufi)",
             p["stop_pct"], p["stop_loss"],
             f" | dalje nga trendi {'mbi' if a['side'] < 0 else 'nën'} {p['exit_level']:.6g}" if p["exit_level"] else ""),
         f"Madhësia e blerjes: {p['position_pct']:.3g}% e kapitalit"

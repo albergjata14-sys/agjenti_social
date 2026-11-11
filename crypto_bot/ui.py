@@ -57,13 +57,22 @@ def price_chart(s: pd.DataFrame, a: dict, cfg, bars: int = 150):
     color = alt.Color("drejtimi:N", title=None, legend=alt.Legend(orient="top"),
                       scale=alt.Scale(domain=["Qiri rritës", "Qiri rënës"], range=[c["up"], c["down"]]))
     x = alt.X("koha:T", title=None, axis=alt.Axis(format="%d %b", grid=False))
-    levels = [("Blerje mbi", a["buy_above"]), ("Stop-loss", a["plan"]["stop_loss"])]
-    if cfg.allow_short:
-        levels.append(("Short nën", a["short_below"]))
-    elif a["plan"]["exit_level"]:
-        levels.append(("Dalje nga trendi", a["plan"]["exit_level"]))
-    if a["plan"]["take_profit"]:
-        levels.append(("Fitimi", a["plan"]["take_profit"]))
+    if a["engulf"]:     # strategjia engulf: nivelet e sesionit aziatik dhe, kur ka sinjal, stop/objektiv
+        e = a["engulf"]
+        levels = [(n, v) for n, v in (("Maja e sesionit", e["session_high"]), ("50% e sesionit", e["session_mid"]),
+                                      ("Fundi i sesionit", e["session_low"])) if v is not None]
+        if a["signal"] in ("BLI", "SHORT"):
+            levels += [("Stop-loss", a["plan"]["stop_loss"]), ("Objektivi", a["plan"]["take_profit"])]
+        if not levels:
+            levels = [("Çmimi", a["price"])]
+    else:
+        levels = [("Blerje mbi", a["buy_above"]), ("Stop-loss", a["plan"]["stop_loss"])]
+        if cfg.allow_short:
+            levels.append(("Short nën", a["short_below"]))
+        elif a["plan"]["exit_level"]:
+            levels.append(("Dalje nga trendi", a["plan"]["exit_level"]))
+        if a["plan"]["take_profit"]:
+            levels.append(("Fitimi", a["plan"]["take_profit"]))
     lv = pd.DataFrame(levels, columns=["niveli", "cmimi"])
     lv["etiketa"] = lv.apply(lambda r: f"{r['niveli']} {r['cmimi']:,.6g}", axis=1)
     # Etiketat vendosen djathtas qirinjve, në një hapësirë të lënë bosh për to.
@@ -113,19 +122,29 @@ def tab_chart(cfg, exchange, symbol):
     m = st.columns(4)
     m[0].metric("Çmimi (qiriri i fundit i mbyllur)", f"{a['price']:,.6g}")
     m[1].metric("Sinjali", a["signal"])
-    m[2].metric("Blerje mbi", f"{a['buy_above']:,.6g}", f"{gap:+.1f}% larg", delta_color="off")
-    if cfg.allow_short:
+    if a["engulf"]:
+        e = a["engulf"]
+        m[2].metric("Bias ditor", {1: "bullish", -1: "bearish", 0: "i paqartë"}[e["bias"]])
+        m[3].metric("Niveli i sesionit u mor", "fundi" if e["swept_low"] and not e["swept_high"] else
+                    "maja" if e["swept_high"] and not e["swept_low"] else "të dy" if e["swept_low"] else "jo")
+    else:
+        m[2].metric("Blerje mbi", f"{a['buy_above']:,.6g}", f"{gap:+.1f}% larg", delta_color="off")
+    if a["engulf"]:
+        pass
+    elif cfg.allow_short:
         m[3].metric("Short nën", f"{a['short_below']:,.6g}",
                     f"{(a['short_below'] / a['price'] - 1) * 100:+.1f}% larg", delta_color="off")
     else:
         m[3].metric("Trendi ditor", "rritës" if a["daily_up"] else "jo rritës")
     st.caption(f"Arsyeja: {a['signal_reason']}")
     st.altair_chart(price_chart(signal_frame(df, cfg, daily), a, cfg), width="stretch")
-    st.caption(f"Vija e plotë është EMA{cfg.trend_ema}. Vijat me ndërprerje janë nivelet e planit, me çmimin përkrah.")
+    st.caption(f"Vija e plotë është EMA{cfg.trend_ema}. Vijat me ndërprerje janë nivelet"
+               + (" e sesionit aziatik (01:00–05:00 ora UK)." if a["engulf"] else " e planit, me çmimin përkrah."))
     p, f = a["plan"], a["forecast"]
     st.markdown(
         f"**Plani nëse hyn tani:** hyrje {p['entry']:,.6g} · stop-loss {p['stop_loss']:,.6g} (−{p['stop_pct']:.3g}%) · "
         f"madhësia {p['position_pct']:.3g}% e kapitalit"
+        + (f" · objektivi {p['take_profit']:,.6g}" if p["take_profit"] else "")
         + (f" · dalje nga trendi nën {p['exit_level']:,.6g}" if p["exit_level"] else "")
         + f"\n\n**Brezi i pritshëm ({f['horizon_candles']} qirinj):** {f['low']:,.6g} – {f['high']:,.6g} · "
         f"**Mbështetja / rezistenca:** {a['support']:,.6g} / {a['resistance']:,.6g} · "
@@ -150,7 +169,7 @@ def tab_chart(cfg, exchange, symbol):
     for col, label, side in ((c1, "Bli (long)", 1), (c1b, "Shit short", -1)):
         if col.button(f"{label} demo", width="stretch", disabled=symbol in mb.positions):
             price = float(exchange.fetch_ticker(symbol)["last"])
-            pos = mb.buy(symbol, price, mb.equity({symbol: price}), p["stop_pct"], side)
+            pos = mb.buy(symbol, price, mb.equity({symbol: price}), cfg.stop_loss_pct, side)
             st.success(f"U hap {'long' if side > 0 else 'short'} {symbol} me {pos['cost']:.2f} {cfg.quote} në "
                        f"{price:,.6g}; stop {pos['sl']:,.6g}" if pos else "Nuk u hap: fonde të pamjaftueshme.")
     if c2.button("Mbyll pozicionin", width="stretch", disabled=symbol not in mb.positions):
@@ -197,7 +216,8 @@ def tab_robot(cfg, exchange):
     whole = c3.checkbox("Skano gjithë tregun (jo vetëm monedhën e zgjedhur)", True, disabled=running)
     if c1.button("▶ Nis robotin", disabled=running, width="stretch"):
         cmd = ([sys.executable, "-m", "crypto_bot", "nis", "--exchange", cfg.exchange]
-               + (["--gjithe-tregun"] if whole else ["--symbol", cfg.symbols[0]]) + (["--short"] if cfg.allow_short else []))
+               + (["--gjithe-tregun"] if whole else ["--symbol", cfg.symbols[0]]) + (["--short"] if cfg.allow_short else [])
+               + ["--strategjia", cfg.strategy, "--timeframe", cfg.timeframe])
         flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
         with open("crypto_bot_output.log", "a", encoding="utf-8") as out:
             subprocess.Popen(cmd, stdout=out, stderr=subprocess.STDOUT, creationflags=flags)
@@ -319,19 +339,30 @@ def render():
     st.caption("Analizë, pika hyrjeje dhe tregtim me para demo. Nuk është këshillë financiare; "
                "nivelet janë rregulla të strategjisë, jo garanci.")
     base = load_config()
-    c = st.columns([2, 2, 1, 1, 2])
+    c = st.columns([2, 2, 1, 1, 2, 2])
     name = c[0].selectbox("Platforma", PLATFORMS, index=PLATFORMS.index(base.exchange) if base.exchange in PLATFORMS else 0)
     symbol = c[1].text_input("Monedha", base.symbols[0]).strip().upper()
     timeframe = c[2].selectbox("Intervali", TIMEFRAMES,
                                index=TIMEFRAMES.index(base.timeframe) if base.timeframe in TIMEFRAMES else 2)
     stop = c[3].number_input("Stop-loss %", 0.5, 50.0, float(base.stop_loss_pct), 0.5)
-    short = c[4].checkbox("Lejo edhe shitje short", base.allow_short,
+    strategies = ["breakout", "score", "engulf"]
+    strategy = c[4].selectbox("Strategjia", strategies, index=strategies.index(base.strategy),
+                              help="breakout: thyerje maje në trend (4h). score: pikët e treguesve. engulf: bias ditor + "
+                                   "sesioni aziatik + engulf në 15m; në prova ka humbur, është për eksperimente.")
+    short = c[5].checkbox("Lejo edhe shitje short", base.allow_short,
                           help="Roboti hap pozicione edhe kur pret rënie. Në prova kjo e ka dobësuar rezultatin.")
+    if strategy == "engulf" and timeframe not in ("15m", "1h"):
+        st.info("Strategjia engulf është menduar për intervalin 15m; zgjidhe te “Intervali”.")
     try:
-        cfg = load_config(exchange=name, symbols=[symbol], timeframe=timeframe, stop_loss_pct=stop, allow_short=short)
+        cfg = load_config(exchange=name, symbols=[symbol], timeframe=timeframe, stop_loss_pct=stop, allow_short=short,
+                          strategy=strategy, **({"max_trades_per_day": 2} if strategy == "engulf" and
+                                                not base.max_trades_per_day else {}))
+        if cfg.data_tz == "auto":
+            cfg.data_tz = "UTC"
         exchange = _exchange(name, False)
-        if hasattr(exchange, "account_currency"):   # MT5: monedha bazë është ajo e llogarisë
+        if hasattr(exchange, "account_currency"):   # MT5: monedha bazë është ajo e llogarisë, ora ajo e serverit
             cfg.quote = exchange.account_currency()
+            cfg.data_tz = exchange.server_tz(symbol)
     except Exception as e:
         return st.error(f"Gabim: {e}")
     tabs = st.tabs(["Grafiku dhe pikat e hyrjes", "Skanimi i tregut", "Roboti (demo)", "Ditari i parashikimeve",

@@ -381,7 +381,8 @@ class FakeMT5:
         return [self.info]
 
     def symbol_info_tick(self, symbol):
-        return self.NS(bid=self.bid, ask=self.ask, last=0.0)
+        import time as _t
+        return self.NS(bid=self.bid, ask=self.ask, last=0.0, time=_t.time() + 2 * 3600)   # serveri në UTC+2
 
     def copy_rates_from_pos(self, symbol, tf, start, count):
         d = self.df.iloc[: len(self.df) - start].tail(count)
@@ -426,6 +427,7 @@ def test_mt5_adapter(tmp_path):
     finally:
         data.make_exchange = real
     assert cfg.quote == "USD" and "DEMO" in ex.account_label()   # monedha merret nga llogaria
+    assert cfg.data_tz == "Europe/Athens"                        # ora e serverit njihet vetë
     b = Broker(cfg, ex)
     pos = b.buy("BTCUSD", 100.0, 1000.0)                          # 1% rrezik / 8% stop = 125 USD → 1.25 lote
     buy = fake.requests[0]
@@ -576,3 +578,93 @@ def test_mt5_short(tmp_path):
     closed = fake.requests[1]
     assert closed["type"] == fake.ORDER_TYPE_BUY and closed["position"] == 7 and closed["price"] == 90.0
     assert t["pnl"] == pytest.approx(1.25 * (99.95 - 90.0)) and not fake.open
+
+
+def random_walk_15m(days=60, seed=11):
+    rng = np.random.default_rng(seed)
+    n = days * 96
+    closes = 100 * np.exp(np.cumsum(rng.normal(0, 0.0015, n)))
+    idx = pd.date_range("2026-01-05", periods=n, freq="15min", tz="UTC")
+    opens = np.r_[closes[0], closes[:-1]]
+    wick = np.abs(rng.normal(0, 0.0008, n))
+    return pd.DataFrame({"open": opens, "high": np.maximum(opens, closes) * (1 + wick),
+                         "low": np.minimum(opens, closes) * (1 - wick), "close": closes, "volume": 100.0}, index=idx)
+
+
+def test_find_engulfs_and_uk_clock():
+    from crypto_bot.engulf import find_engulfs, uk_clock
+
+    #            0      1      2      3      4
+    o = np.array([10.0, 10.0, 9.0, 9.6, 10.6])
+    c = np.array([10.0, 9.0, 9.6, 10.6, 9.4])    # 1 rënës; 2 rritës (nuk mbyllet mbi majën e 1); 3 e konfirmon
+    h = np.array([10.1, 10.2, 9.7, 10.7, 10.8])
+    l = np.array([9.9, 8.8, 8.9, 9.5, 9.3])
+    bull, bull_low, bear, bear_high = find_engulfs(o, h, l, c, max_bars=3)
+    assert bull.tolist() == [False, False, False, True, False] and bull_low[3] == pytest.approx(8.8)
+    # Qiriri 4 mbyllet nën fundin e qiririt 3 (rritësi i fundit) → engulf bearish; zona shkon deri te maja 10.8.
+    assert bear.tolist() == [False, False, False, False, True] and bear_high[4] == pytest.approx(10.8)
+    # Konfirmimi shumë i vonë nuk vlen.
+    assert not find_engulfs(o, h, l, c, max_bars=1)[0].any()
+
+    # Ora UK: në verë (BST) 00:00 UTC është 01:00 në UK; në dimër 01:00 UTC është 01:00.
+    idx = pd.DatetimeIndex(["2026-07-01 00:00", "2026-01-15 01:00"], tz="UTC")
+    assert uk_clock(idx, Config())[1].tolist() == [1.0, 1.0]
+    # Serveri MT5 (ora e Evropës Lindore) është gjithmonë 2 orë para UK: 03:00 e serverit = 01:00 UK.
+    srv = pd.DatetimeIndex(["2026-07-01 03:00", "2026-01-15 03:00"], tz="UTC")
+    assert uk_clock(srv, Config(data_tz="Europe/Athens"))[1].tolist() == [1.0, 1.0]
+
+
+def test_engulf_strategy_rules():
+    df = random_walk_15m()
+    cfg = Config(strategy="engulf", timeframe="15m", allow_short=True, daily_trend_ema=0)
+    s = signal_frame(df, cfg)
+    assert s["buy"].sum() > 3 and s["short"].sum() > 3
+    hour = (s.index.hour + s.index.minute / 60).to_numpy()      # janar–mars: UK = UTC
+    for side, col, swept in ((1, "buy", "swept_low"), (-1, "short", "swept_high")):
+        e = s[s[col]]
+        assert (e["bias"] == side).all() and e[swept].all()                      # me bias-in dhe pas marrjes së nivelit
+        assert ((e["close"] - e["stop_price"]) * side > 0).all()                 # stop-i në anën e duhur
+        assert ((e["target_price"] - e["close"]) * side > 0).all()               # objektivi në drejtim të bias-it
+        rr = (e["target_price"] - e["close"]).abs() / (e["close"] - e["stop_price"]).abs()
+        assert (rr >= cfg.engulf_min_rr - 1e-9).all()
+        assert ((hour[s[col].to_numpy()] >= 5) & (hour[s[col].to_numpy()] < 20)).all()   # vetëm pas sesionit
+    assert not (s["sell"] | s["cover"]).any()
+    # Pa short të lejuar nuk ka sinjale shitjeje; bias neutral nuk tregton (parazgjedhja).
+    assert not signal_frame(df, Config(strategy="engulf", daily_trend_ema=0))["short"].any()
+    assert not (s["buy"] | s["short"])[s["bias"] == 0].any()
+    more = signal_frame(df, Config(strategy="engulf", allow_short=True, daily_trend_ema=0, engulf_neutral_mode=True))
+    assert (more["buy"] | more["short"]).sum() > (s["buy"] | s["short"]).sum()
+    strong = signal_frame(df, Config(strategy="engulf", allow_short=True, daily_trend_ema=0, engulf_require_strong=True))
+    assert 0 < (strong["buy"] | strong["short"]).sum() < (s["buy"] | s["short"]).sum()
+
+    # Pa të dhëna nga e ardhmja: sinjalet e së kaluarës nuk ndryshojnë kur shtohen qirinj të rinj.
+    part = signal_frame(df.iloc[:4000], cfg)
+    for col in ("buy", "short", "bias"):
+        assert (part[col].to_numpy() == s[col].to_numpy()[:4000]).all()
+    assert np.allclose(part["stop_price"].to_numpy(), s["stop_price"].to_numpy()[:4000], equal_nan=True)
+
+    a = analyze(df.iloc[: s.index.get_loc(s[s["buy"]].index[-1]) + 1], cfg, "X")
+    assert a["signal"] == "BLI" and "hyrje" in a["signal_reason"] and a["engulf"]["bias"] == 1
+    assert a["plan"]["stop_loss"] < a["price"] < a["plan"]["take_profit"]
+
+
+def test_engulf_backtest_and_daily_limit(tmp_path):
+    df = random_walk_15m()
+    kw = dict(strategy="engulf", timeframe="15m", allow_short=True, daily_trend_ema=0, fee_pct=0)
+    r = backtest(df, Config(**kw))
+    assert r["trades"] > 5
+    for t in r["trade_list"][:-1]:
+        assert t["reason"] in ("stop-loss", "take-profit")       # dalje vetëm me stop ose objektiv
+    stops = [t for t in r["trade_list"] if t["reason"] == "stop-loss"]
+    assert stops and all(t["r"] == pytest.approx(-1, abs=0.35) for t in stops)   # një stop kushton rreth 1R
+    assert r["total_r"] == pytest.approx(sum(t["r"] for t in r["trade_list"]))
+    # Kufiri i hyrjeve në ditë respektohet.
+    one = backtest(df, Config(**kw, max_trades_per_day=1))
+    per_day = pd.Series([t["entry_time"][:10] for t in one["trade_list"]]).value_counts()
+    assert per_day.max() == 1 and one["trades"] <= r["trades"]
+
+    # Brokeri përdor stop-in dhe objektivin e saktë të sinjalit; madhësia del nga largësia e stop-it.
+    b = Broker(Config(state_file=str(tmp_path / "s.json"), fee_pct=0, position_size_pct=100))
+    pos = b.buy("EUR/USDT", 1.1000, 1000.0, side=-1, stop_price=1.1055, take_price=1.0900)
+    assert pos["sl"] == 1.1055 and pos["tp"] == 1.0900 and pos["cost"] == pytest.approx(1000.0)   # 1% / 0.5% > kufiri
+    assert b.check_exit("EUR/USDT", 1.0890) == "take-profit"

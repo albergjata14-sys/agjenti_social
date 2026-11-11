@@ -98,7 +98,7 @@ def run_cycle(exchange, broker, cfg) -> list:
     equity = broker.equity(prices)
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     if st.get("day") != today:
-        st["day"], st["day_start_equity"] = today, equity
+        st["day"], st["day_start_equity"], st["entries_today"] = today, equity, 0
     day_pct = (equity / st["day_start_equity"] - 1) * 100 if st["day_start_equity"] else 0.0
     halted = None
     if cfg.max_daily_loss_pct and day_pct <= -cfg.max_daily_loss_pct:
@@ -120,14 +120,19 @@ def run_cycle(exchange, broker, cfg) -> list:
             skip = "ky sinjal është përdorur tashmë (pa ri-hyrje në të njëjtin qiri)"
         elif halted:
             skip = halted
+        elif cfg.max_trades_per_day and st.get("entries_today", 0) >= cfg.max_trades_per_day:
+            skip = f"numri maksimal i hyrjeve në ditë ({cfg.max_trades_per_day})"
         elif len(broker.positions) >= cfg.max_open_positions:
             skip = f"numri maksimal i pozicioneve ({cfg.max_open_positions})"
         elif cfg.max_spread_pct and (spread := spread_pct(exchange, sym) or 0) > cfg.max_spread_pct:
             skip = f"diferenca blerje/shitje shumë e madhe ({spread:.2f}% > {cfg.max_spread_pct:g}%)"
         else:
-            pos = broker.buy(sym, a["price"], equity, a["plan"]["stop_pct"], a["side"])
+            exact = cfg.strategy == "engulf"      # engulf sjell stop-in dhe objektivin si çmime të sakta
+            pos = broker.buy(sym, a["price"], equity, a["plan"]["stop_pct"], a["side"],
+                             a["plan"]["stop_loss"] if exact else None, a["plan"]["take_profit"] if exact else None)
             if pos:
                 entered[sym] = a["time"]
+                st["entries_today"] = st.get("entries_today", 0) + 1
                 actions.append((a["signal"], sym, pos))
                 record(cfg, symbol=sym, action=a["signal"], reason=a["signal_reason"], price=pos["entry"],
                        score=a["score"], stop_loss=pos["sl"], take_profit=pos["tp"])
