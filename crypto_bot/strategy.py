@@ -139,6 +139,8 @@ def analyze(df: pd.DataFrame, cfg, symbol: str = "", horizon: int = 12, daily=No
         "signal": signal,
         "signal_reason": why,
         "breakout_high": float(last["breakout_high"]),
+        "buy_above": float(max(last["breakout_high"], last["trend_ema"])),   # mbyllja që do të jepte sinjal
+        "daily_up": bool(last["daily_up"]),
         "breakout_low": float(last["breakout_low"]),
         "confidence": round(abs(score), 1),
         "direction": "RRITJE" if score > 15 else "RËNIE" if score < -15 else "ANASH",

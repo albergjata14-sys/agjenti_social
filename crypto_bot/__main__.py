@@ -80,10 +80,21 @@ def main(argv=None):
             print(format_report(r, cfg), end="\n\n")
     elif a.komanda == "skano":
         cfg.scan_market = True
-        print(f"{'Monedha':<16}{'Çmimi':>14}{'Pikët':>8}  {'Sinjali':<6} Arsyeja")
         rows = scan(exchange, cfg)
-        for r in sorted(rows, key=lambda r: ({"BLI": 0, "PRIT": 1, "SHIT": 2}[r["signal"]], -r["score"])):
-            print(f"{r['symbol']:<16}{r['price']:>14.6g}{r['score']:>+8.1f}  {r['signal']:<6} {r['signal_reason']}")
+        rows.sort(key=lambda r: ({"BLI": 0, "PRIT": 1, "SHIT": 2}[r["signal"]], -r["score"]))
+        if cfg.strategy == "breakout":
+            # "Larg" = sa % duhet të ngjitet çmimi që një mbyllje të japë sinjal blerjeje.
+            print(f"{'Monedha':<16}{'Çmimi':>12}{'Pikët':>8}  {'Sinjali':<8}{'Blerje mbi':>12}{'Larg':>8}  Trendi ditor")
+            for r in rows:
+                gap = (r["buy_above"] / r["price"] - 1) * 100
+                print(f"{r['symbol']:<16}{r['price']:>12.6g}{r['score']:>+8.1f}  {r['signal']:<8}"
+                      f"{r['buy_above']:>12.6g}{gap:>+7.1f}%  {'rritës' if r['daily_up'] else 'jo rritës'}")
+        else:
+            print(f"{'Monedha':<16}{'Çmimi':>12}{'Pikët':>8}  {'Sinjali':<8}Arsyeja")
+            for r in rows:
+                print(f"{r['symbol']:<16}{r['price']:>12.6g}{r['score']:>+8.1f}  {r['signal']:<8}{r['signal_reason']}")
+        buys = sum(r["signal"] == "BLI" for r in rows)
+        print(f"\n{len(rows)} monedha | sinjale blerjeje: {buys} | trend ditor rritës: {sum(r['daily_up'] for r in rows)}")
     elif a.komanda == "backtest":
         for sym in cfg.symbols:
             df = fetch_candles(exchange, sym, cfg.timeframe, cfg.candles)
