@@ -6,7 +6,7 @@ from .backtest import backtest, format_backtest
 from .bot import run_forever, scan
 from .broker import Broker
 from .config import load_config
-from .data import fetch_candles, fetch_daily, make_exchange
+from .data import adapt_config, fetch_candles, fetch_daily, make_exchange
 from .strategy import format_report
 
 
@@ -20,7 +20,7 @@ def main(argv=None):
     p.add_argument("--objektivi", type=float, help="ditar: çmimi objektiv i parashikuar")
     p.add_argument("--burimi", default="mexc-ai", help="ditar: kush e dha parashikimin")
     p.add_argument("--config", help="rruga e config.json")
-    p.add_argument("--symbol", help="p.sh. BTC/USDT")
+    p.add_argument("--symbol", help="p.sh. BTC/USDT; disa me presje: XAUUSD,BTCUSD")
     p.add_argument("--exchange", help="mexc, binance, bybit ose mt5")
     p.add_argument("--testnet", action="store_true", help="rrjeti i testimit i platformës (Binance, Bybit)")
     p.add_argument("--timeframe", help="p.sh. 15m, 1h, 4h, 1d")
@@ -36,13 +36,14 @@ def main(argv=None):
     cfg = load_config(a.config, exchange=a.exchange, testnet=True if a.testnet else None, timeframe=a.timeframe, candles=a.candles,
                       strategy=a.strategy, take_profit_pct=a.take_profit_pct, stop_loss_pct=a.stop_loss_pct,
                       trailing_stop_pct=a.trailing_stop_pct,
-                      symbols=[a.symbol] if a.symbol else None,
+                      symbols=[x.strip() for x in a.symbol.split(",") if x.strip()] if a.symbol else None,
                       scan_market=True if a.gjithe_tregun else None)
 
     if a.komanda == "nis":
+        exchange = adapt_config(cfg, make_exchange(cfg, with_keys=a.live))
         if a.live:
             what = ("urdhra në rrjetin e TESTIMIT (para demo)" if cfg.testnet else
-                    "urdhra në llogarinë e hapur në terminalin MT5 (reale ose demo)" if cfg.exchange == "mt5" else
+                    f"urdhra në llogarinë MT5 {exchange.account_label()}" if hasattr(exchange, "account_label") else
                     "urdhra me PARA REALE")
             if input(f"KUJDES: roboti do të dërgojë {what} në {cfg.exchange}. "
                      "Shkruaj 'PO' për të vazhduar: ").strip() != "PO":
@@ -50,10 +51,9 @@ def main(argv=None):
             tag = f"_{cfg.exchange}_testnet" if cfg.testnet else f"_{cfg.exchange}_live"
             cfg.state_file = cfg.state_file.replace(".json", tag + ".json")
             cfg.log_file = cfg.log_file.replace(".jsonl", tag + ".jsonl")
-        exchange = make_exchange(cfg, with_keys=a.live)
         return run_forever(exchange, Broker(cfg, exchange if a.live else None), cfg)
 
-    exchange = make_exchange(cfg)
+    exchange = adapt_config(cfg, make_exchange(cfg))
     if a.komanda == "ditar":
         path = cfg.predictions_file
         if a.veprimi == "shto":

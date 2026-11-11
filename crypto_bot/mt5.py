@@ -80,6 +80,16 @@ class MT5Exchange:
         return {name: {"quoteVolume": 1.0} for name in self.load_markets()}
 
     # --- llogaria dhe urdhrat -----------------------------------------------
+    def account_currency(self) -> str:
+        a = self.mt5.account_info()
+        if a is None:
+            raise RuntimeError("MT5 nuk është i kyçur në asnjë llogari (hap terminalin dhe kyçu)")
+        return a.currency
+
+    def account_label(self) -> str:
+        a = self.mt5.account_info()
+        return f"{a.login} në {a.server} ({'DEMO' if a.trade_mode == 0 else 'REALE'}), bilanci {a.balance:.2f} {a.currency}"
+
     def fetch_balance(self) -> dict:
         a = self.mt5.account_info()
         if a is None:

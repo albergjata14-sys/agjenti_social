@@ -389,7 +389,8 @@ class FakeMT5:
                  "tick_volume": r.volume} for t, r in zip(d.index, d.itertuples())]
 
     def account_info(self):
-        return self.NS(currency="USD", margin_free=1000.0, equity=1000.0)
+        return self.NS(currency="USD", margin_free=1000.0, equity=1000.0, balance=1000.0, login=1, server="Demo",
+                       trade_mode=0)
 
     def positions_get(self, symbol=None):
         return list(self.open)
@@ -416,7 +417,10 @@ def test_mt5_adapter(tmp_path):
     with pytest.raises(ValueError):
         ex.fetch_ticker("NUKKA")
 
-    cfg = Config(exchange="mt5", quote="USD", state_file=str(tmp_path / "mt5.json"), fee_pct=0)
+    from crypto_bot.data import adapt_config
+
+    cfg = adapt_config(Config(exchange="mt5", state_file=str(tmp_path / "mt5.json"), fee_pct=0), ex)
+    assert cfg.quote == "USD" and "DEMO" in ex.account_label()   # monedha merret nga llogaria
     b = Broker(cfg, ex)
     pos = b.buy("BTCUSD", 100.0, 1000.0)                          # 1% rrezik / 8% stop = 125 USD → 1.25 lote
     buy = fake.requests[0]

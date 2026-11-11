@@ -40,6 +40,13 @@ def make_exchange(cfg, with_keys: bool = False):
     return exchange
 
 
+def adapt_config(cfg, exchange):
+    """Përshtat konfigurimin me platformën: në MT5 monedha bazë është ajo e llogarisë (p.sh. USD)."""
+    if hasattr(exchange, "account_currency"):
+        cfg.quote = exchange.account_currency()
+    return cfg
+
+
 def to_frame(rows) -> pd.DataFrame:
     df = pd.DataFrame(rows, columns=["time", "open", "high", "low", "close", "volume"])
     df["time"] = pd.to_datetime(df["time"], unit="ms", utc=True)
