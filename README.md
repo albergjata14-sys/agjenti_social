@@ -37,6 +37,7 @@ python -m crypto_bot analizo --symbol ETH/USDT --timeframe 4h
 python -m crypto_bot skano                        # rendit monedhat më të tregtuara sipas sinjalit
 python -m crypto_bot backtest --candles 5000       # provo strategjinë në të kaluarën
 python -m crypto_bot backtest --strategjia score --fitim 4 --humbje 2   # strategjia e vjetër me pikë
+python -m crypto_bot portofol --candles 5000      # si do të kishte dalë roboti mbi shumë monedha njëherësh
 python -m crypto_bot nis                          # roboti punon vetë, në SIMULIM (para virtuale)
 python -m crypto_bot nis --gjithe-tregun          # njësoj, por zgjedh nga gjithë tregu
 python -m crypto_bot nis --live                   # PARA REALE (kërkon konfirmim dhe çelësa API)
@@ -60,7 +61,8 @@ E njëjta analizë, skanim dhe backtest gjenden edhe te paneli **Crypto Trading 
 | `trailing_stop_pct` | stop që ndjek çmimin më të lartë (0 = i fikur) |
 | `risk_per_trade_pct` | humbja maksimale për tregti si % e kapitalit; madhësia e blerjes llogaritet nga largësia e stop-it (0 = i fikur) |
 | `position_size_pct` | % maksimale e kapitalit për një blerje |
-| `max_open_positions` | sa monedha mund të mbahen njëkohësisht |
+| `max_open_positions` | sa monedha mund të mbahen njëkohësisht (parazgjedhur 8) |
+| `market_filter_symbol` | bli vetëm kur ky treg (parazgjedhur `BTC/USDT`) është mbi mesataren ditore; `""` = i fikur |
 | `max_daily_loss_pct` | pas kësaj humbjeje brenda ditës (UTC) nuk hapen blerje të reja (0 = i fikur) |
 | `max_consecutive_losses` | pas kaq humbjesh radhazi brenda ditës nuk hapen blerje të reja (0 = i fikur) |
 | `max_spread_pct` | mos bli kur diferenca mes çmimit të blerjes dhe shitjes e kalon këtë % (0 = i fikur) |
@@ -89,6 +91,40 @@ planin hyrje / fitim / stop. Roboti tregton pa levë.
 mbyllet nën fundin e 55 qirinjve, nën EMA200 dhe me trend ditor rënës; e mbyll kur çmimi mbyllet mbi
 majën e 20 qirinjve ose kur preket stop-loss (që është sipër hyrjes). Punon në simulim në çdo platformë
 dhe me urdhra në MT5; tregu spot i MEXC, Binance dhe Bybit nuk e lejon me urdhra realë.
+
+### Prova e portofolit dhe çfarë thonë studimet
+
+Roboti nuk tregton një monedhë të vetme: skanon tregun dhe mban disa pozicione njëherësh. Komanda
+`portofol` e simulon pikërisht këtë, me kapital të përbashkët. Rezultati mbi 20 monedhat më të
+tregtuara të MEXC me histori të plotë (4h, shtator 2024 – nëntor 2026, komision 0.1%):
+
+| Rregullimi | Totali | Rënia maks. | Gjysma 1 / 2 | Muaj me fitim / zero / humbje |
+|---|---|---|---|---|
+| I ri: 8 pozicione, rrezik 0.5%, filtër BTC, 20 monedha | +52% | 17% | +44% / +6% | 9 / 5 / 12 |
+| I vjetër: 3 pozicione, rrezik 1%, pa filtër, 30 monedha | +9% | 27% | +12% / −3% | 9 / 0 / 17 |
+
+Tre gjëra dolën të qëndrueshme në të gjitha kombinimet e provuara dhe përputhen me studimet:
+më shumë pozicione njëherësh (shpërndarje), blerje vetëm kur BTC është në trend ditor rritës, dhe
+kufizim te monedhat më të tregtuara. Renditja sipas momentumit 30-ditor nuk ndihmoi.
+
+Kufizimet: fitimi nuk është i rregullt (pothuajse gjysma e muajve janë me humbje dhe shumica e fitimit
+erdhi në tremujorin e parë); mbajtja e thjeshtë e të njëjtave monedha dha më shumë; dhe monedhat janë
+zgjedhur sipas volumit të sotëm, pra janë ato që mbijetuan, ndaj shifrat janë optimiste.
+
+Burimet e përdorura:
+- Ndjekja e trendit (momentumi në seri kohore) është gjetur në 58 tregje të ndryshme dhe në të dhëna që
+  shkojnë 137 vjet mbrapa, por janë prova mbi të kaluarën, jo fitime të realizuara
+  ([Moskowitz, Ooi, Pedersen 2012](https://papers.ssrn.com/abstract=2089463);
+  [A Century of Evidence on Trend-Following](https://www.TrendFollowing.com/whitepaper/Century_Evidence_Trend_Following.pdf)).
+- Te kriptot momentumi në kohë është i dokumentuar dhe kthimi i tregut parashikon javët pasuese, por
+  rezultatet janë bruto dhe studime më të reja gjejnë rrëzime të forta
+  ([Liu, Tsyvinski, Wu](https://www.nber.org/papers/w25882.pdf);
+  [studim i vitit 2025](https://link.springer.com/article/10.1007/s11408-025-00474-9)).
+- 74–89% e llogarive të vogla humbasin para në CFD sipas rregullatorit evropian
+  ([ESMA](https://www.esma.europa.eu/sites/default/files/library/esma35-43-1135_notice_of_pi_decisions_on_cfds_and_binary_options.pdf)).
+- Arbitrazhi i normës së financimit (spot kundrejt kontratave pa afat) jep kthime më të rregullta por
+  jo pa rrezik; kërkon tregun e kontratave dhe nuk është ndërtuar në këtë robot
+  ([He, Manela et al.](https://arxiv.org/pdf/2212.06888v2)).
 
 ### Strategjia `engulf` (eksperimentale)
 

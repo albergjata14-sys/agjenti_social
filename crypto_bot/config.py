@@ -13,7 +13,7 @@ class Config:
     quote: str = "USDT"                # monedha bazë me të cilën blihet
     symbols: list = field(default_factory=lambda: ["BTC/USDT"])
     scan_market: bool = False          # True = skano gjithë tregun, jo vetëm `symbols`
-    scan_top_n: int = 30               # sa monedha (sipas volumit) të skanohen
+    scan_top_n: int = 20               # sa monedha (sipas volumit) të skanohen
     timeframe: str = "4h"
     candles: int = 500
     strategy: str = "breakout"         # "breakout" (thyerje maje), "score" (pikët e treguesve) ose "engulf"
@@ -45,9 +45,10 @@ class Config:
     stop_loss_pct: float = 8.0         # shit me humbje kur çmimi bie kaq %
     stop_loss_atr: float = 0.0         # nëse > 0: stop = hyrja − kaq × ATR (zëvendëson stop_loss_pct)
     trailing_stop_pct: float = 0.0     # 0 = i fikur; përndryshe stop-i ndjek çmimin më të lartë
-    risk_per_trade_pct: float = 1.0    # humbja maksimale për tregti si % e kapitalit (0 = përdor vetëm position_size_pct)
-    position_size_pct: float = 25.0    # % maksimale e kapitalit për një blerje
-    max_open_positions: int = 3
+    risk_per_trade_pct: float = 0.5    # humbja maksimale për tregti si % e kapitalit (0 = përdor vetëm position_size_pct)
+    position_size_pct: float = 12.5    # % maksimale e kapitalit për një blerje
+    max_open_positions: int = 8
+    market_filter_symbol: str = "BTC/USDT"   # bli vetëm kur ky treg është në trend ditor rritës ("" = i fikur)
     max_daily_loss_pct: float = 5.0    # pas kësaj humbjeje brenda ditës nuk hapen blerje të reja (0 = i fikur)
     max_consecutive_losses: int = 3    # pas kaq humbjesh radhazi brenda ditës nuk hapen blerje të reja (0 = i fikur)
     max_spread_pct: float = 0.5        # mos bli kur diferenca blerje/shitje është më e madhe se kaq % (0 = i fikur)

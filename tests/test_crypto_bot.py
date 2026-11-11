@@ -4,6 +4,8 @@ import numpy as np
 import pandas as pd
 import pytest
 
+SIZE = dict(risk_per_trade_pct=1.0, position_size_pct=25.0)   # madhësia e supozuar në testet e llogaritjeve
+
 from crypto_bot.backtest import backtest
 from crypto_bot.bot import losses_in_row, run_cycle
 from crypto_bot.broker import Broker
@@ -297,13 +299,13 @@ def test_daily_trend_uses_only_closed_days():
 
 def test_risk_based_sizing_and_atr_stop(tmp_path):
     # Rrezik 1% me stop 8% → 12.5% e kapitalit; me stop 2% do të ishte 50%, por kufiri është 25%.
-    assert position_cost(Config(), 1000, 8) == pytest.approx(125)
-    assert position_cost(Config(), 1000, 2) == pytest.approx(250)
+    assert position_cost(Config(**SIZE), 1000, 8) == pytest.approx(125)
+    assert position_cost(Config(**SIZE), 1000, 2) == pytest.approx(250)
     assert position_cost(Config(risk_per_trade_pct=0, position_size_pct=10), 1000, 8) == pytest.approx(100)
     assert stop_distance_pct(Config(), 100, 3) == 8
     assert stop_distance_pct(Config(stop_loss_atr=1.5), 100, 3) == pytest.approx(4.5)
 
-    cfg = Config(state_file=str(tmp_path / "s.json"), stop_loss_atr=1.5, fee_pct=0)
+    cfg = Config(state_file=str(tmp_path / "s.json"), stop_loss_atr=1.5, fee_pct=0, **SIZE)
     b = Broker(cfg)
     pos = b.buy("BTC/USDT", 100, 1000, stop_pct=4.5)
     assert pos["sl"] == pytest.approx(95.5) and pos["cost"] == pytest.approx(1000 * 1 / 4.5)
@@ -420,7 +422,7 @@ def test_mt5_adapter(tmp_path):
 
     import crypto_bot.data as data
 
-    cfg = Config(exchange="mt5", state_file=str(tmp_path / "mt5.json"), fee_pct=0)
+    cfg = Config(exchange="mt5", state_file=str(tmp_path / "mt5.json"), fee_pct=0, **SIZE)
     real, data.make_exchange = data.make_exchange, lambda c, with_keys=False: ex
     try:
         assert data.connect(cfg) is ex
@@ -523,7 +525,7 @@ def test_short_selling(tmp_path):
     assert backtest(down, off)["trades"] == 0
 
     # Llogaritja në simulim: short 125 USDT në 100 → çmimi 90 jep +10%, çmimi 108 prek stop-in.
-    b = Broker(Config(state_file=str(tmp_path / "s.json"), fee_pct=0))
+    b = Broker(Config(state_file=str(tmp_path / "s.json"), fee_pct=0, **SIZE))
     pos = b.buy("X/USDT", 100.0, 1000.0, side=-1)
     assert pos["side"] == -1 and pos["sl"] == pytest.approx(108) and b.cash() == pytest.approx(875)
     assert b.equity({"X/USDT": 90.0}) == pytest.approx(1012.5)
@@ -567,7 +569,7 @@ def test_mt5_short(tmp_path):
 
     fake = FakeMT5(candles(trend(400, 100, 0.002)))
     ex = MT5Exchange(fake)
-    b = Broker(Config(exchange="mt5", quote="USD", state_file=str(tmp_path / "m.json"), fee_pct=0), ex)
+    b = Broker(Config(exchange="mt5", quote="USD", state_file=str(tmp_path / "m.json"), fee_pct=0, **SIZE), ex)
     pos = b.buy("BTCUSD", 100.0, 1000.0, side=-1)
     opened = fake.requests[0]
     assert opened["type"] == fake.ORDER_TYPE_SELL and opened["price"] == 99.95       # short hapet në bid
@@ -668,3 +670,53 @@ def test_engulf_backtest_and_daily_limit(tmp_path):
     pos = b.buy("EUR/USDT", 1.1000, 1000.0, side=-1, stop_price=1.1055, take_price=1.0900)
     assert pos["sl"] == 1.1055 and pos["tp"] == 1.0900 and pos["cost"] == pytest.approx(1000.0)   # 1% / 0.5% > kufiri
     assert b.check_exit("EUR/USDT", 1.0890) == "take-profit"
+
+
+def test_market_filter_and_portfolio(tmp_path):
+    from crypto_bot.backtest import format_portfolio, portfolio_backtest
+    from crypto_bot.bot import market_trend_up
+
+    # Filtri i tregut: BTC në rënie ditore → roboti nuk blen, edhe kur monedha ka sinjal blerjeje.
+    up, down = trend(400, 100, 0.002), trend(400, 100, -0.002)
+    cfg = Config(symbols=["ETH/USDT"], candles=300, strategy="score", state_file=str(tmp_path / "s.json"),
+                 log_file=str(tmp_path / "d.jsonl"), daily_trend_ema=3, market_filter_symbol="BTC/USDT")
+
+    class DailyFake(FakeExchange):          # platforma e rreme jep ditorë të nxjerrë nga qirinjtë orarë
+        def parse_timeframe(self, tf):
+            return 86400 if tf == "1d" else 3600
+
+        def fetch_ohlcv(self, symbol, timeframe, since=None, limit=None):
+            if timeframe != "1d":
+                return super().fetch_ohlcv(symbol, timeframe, since, limit)
+            d = self.data[symbol].resample("1D").agg({"open": "first", "high": "max", "low": "min",
+                                                      "close": "last", "volume": "sum"}).dropna()
+            return [[int(t.timestamp() * 1000), *v] for t, v in zip(d.index, d.to_numpy().tolist())]
+
+    def exchange(btc):
+        base = make_fake({"ETH/USDT": up, "BTC/USDT": btc})
+        ex = DailyFake(base.data, base.now)
+        return ex
+
+    assert market_trend_up(exchange(up), cfg) is True and market_trend_up(exchange(down), cfg) is False
+    assert market_trend_up(exchange(up), Config(market_filter_symbol="")) is None
+    assert run_cycle(exchange(down), Broker(cfg), cfg) == []
+    assert "tregu i përgjithshëm" in read_log(cfg)[-1]["reason"]
+    assert [a[0] for a in run_cycle(exchange(up), Broker(cfg), cfg)] == ["BLI"]
+
+    # Prova e portofolit: kapital i përbashkët, kufi pozicionesh, filtër tregu.
+    frames = {f"C{i}/USDT": (candles(trend(700, 100, 0.0, 0.01, seed=i)), None) for i in range(5)}   # pa drejtim, me luhatje
+    pc = Config(strategy="score", daily_trend_ema=0, max_open_positions=2, fee_pct=0.1, market_filter_symbol="",
+                stop_loss_pct=1.5)      # stop i ngushtë që të ketë shumë tregti të mbyllura
+    r = portfolio_backtest(frames, pc)
+    assert r["symbols"] == 5 and r["trades"] > 5 and r["end"] > 0
+    assert r["months_up"] + r["months_flat"] + r["months_down"] == len(r["monthly"])
+    t = pd.DataFrame(r["trade_list"])
+    opened = pd.to_datetime(t["entry_time"]).to_numpy()[:, None]
+    closed = pd.to_datetime(t["exit_time"]).to_numpy()[:, None]
+    grid = pd.to_datetime(t["entry_time"]).to_numpy()[None, :]
+    assert ((opened <= grid) & (closed > grid)).sum(axis=0).max() <= 2      # kurrë më shumë se 2 pozicione njëherësh
+    assert "Portofoli" in format_portfolio(r, pc)
+    # Me tregun në rënie filtri ndalon çdo blerje.
+    pm = Config(strategy="score", daily_trend_ema=3, max_open_positions=2)
+    blocked = portfolio_backtest({k: (v[0], None) for k, v in frames.items()}, pm, market=(candles(down), None))
+    assert blocked["trades"] == 0

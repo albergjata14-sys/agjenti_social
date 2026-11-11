@@ -65,6 +65,22 @@ def losses_in_row(trades: list, today: str) -> int:
     return n
 
 
+def market_trend_up(exchange, cfg):
+    """A është tregu i përgjithshëm (BTC) në trend ditor rritës? None kur filtri është i fikur ose s'matet dot."""
+    sym = cfg.market_filter_symbol
+    if not sym or not cfg.daily_trend_ema:
+        return None
+    try:
+        daily = fetch_candles(exchange, sym, "1d", 3 * cfg.daily_trend_ema + 10)
+        c = daily["close"]
+        return bool(c.iloc[-1] > c.ewm(span=cfg.daily_trend_ema, adjust=False).mean().iloc[-1])
+    except Exception as e:
+        if sym not in _skipped:
+            _skipped.add(sym)
+            log(f"Filtri i tregut ({sym}) nuk u llogarit dot dhe po anashkalohet: {e}")
+        return None
+
+
 def _sell(broker, cfg, sym, price, reason, actions, score=None):
     t = broker.sell(sym, price, reason)
     actions.append(("SHIT", sym, t))
@@ -106,6 +122,8 @@ def run_cycle(exchange, broker, cfg) -> list:
     elif cfg.max_consecutive_losses and losses_in_row(st["trades"], today) >= cfg.max_consecutive_losses:
         halted = f"{cfg.max_consecutive_losses} humbje radhazi sot"
 
+    market_up = market_trend_up(exchange, cfg)
+
     # 4) Hap pozicione të reja. Çdo vendim regjistrohet një herë për çdo qiri të ri.
     seen, entered = st.setdefault("last_logged", {}), st.setdefault("last_entry_signal", {})
     for a in results:
@@ -120,6 +138,8 @@ def run_cycle(exchange, broker, cfg) -> list:
             skip = "ky sinjal është përdorur tashmë (pa ri-hyrje në të njëjtin qiri)"
         elif halted:
             skip = halted
+        elif a["signal"] == "BLI" and market_up is False:
+            skip = f"tregu i përgjithshëm ({cfg.market_filter_symbol}) nuk është në trend ditor rritës"
         elif cfg.max_trades_per_day and st.get("entries_today", 0) >= cfg.max_trades_per_day:
             skip = f"numri maksimal i hyrjeve në ditë ({cfg.max_trades_per_day})"
         elif len(broker.positions) >= cfg.max_open_positions:

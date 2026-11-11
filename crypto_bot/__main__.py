@@ -2,17 +2,17 @@
 import argparse
 
 from . import journal
-from .backtest import backtest, format_backtest
+from .backtest import backtest, format_backtest, format_portfolio, portfolio_backtest
 from .bot import run_forever, scan
 from .broker import Broker
 from .config import load_config
-from .data import connect, fetch_candles, fetch_daily
+from .data import connect, fetch_candles, fetch_daily, top_symbols
 from .strategy import format_report
 
 
 def main(argv=None):
     p = argparse.ArgumentParser(prog="crypto_bot", description="Robot analize dhe tregtimi për kriptomonedha")
-    p.add_argument("komanda", choices=["analizo", "skano", "backtest", "nis", "ditar"])
+    p.add_argument("komanda", choices=["analizo", "skano", "backtest", "portofol", "nis", "ditar"])
     p.add_argument("veprimi", nargs="?", choices=["shto"], help="vetëm për 'ditar': shto një parashikim")
     p.add_argument("--drejtimi", choices=["rritje", "renie", "rënie"], help="ditar: drejtimi i parashikuar")
     p.add_argument("--ore", type=float, default=24, help="ditar: afati i parashikimit në orë")
@@ -101,6 +101,24 @@ def main(argv=None):
         if cfg.allow_short:
             print(f"\nSinjale short: {', '.join(r['symbol'] for r in rows if r['signal'] == 'SHORT') or 'asnjë'}")
         print(f"\n{len(rows)} monedha | sinjale blerjeje: {buys} | trend ditor rritës: {sum(r['daily_up'] for r in rows)}")
+    elif a.komanda == "portofol":
+        if cfg.strategy == "engulf" or cfg.allow_short:
+            raise ValueError("prova e portofolit mbështet vetëm blerjet me strategjitë breakout dhe score")
+        symbols = top_symbols(exchange, cfg.quote, cfg.scan_top_n) if (cfg.scan_market or not a.symbol) else cfg.symbols
+        frames = {}
+        for sym in symbols:
+            try:
+                df = fetch_candles(exchange, sym, cfg.timeframe, cfg.candles)
+                if len(df) >= cfg.candles * 0.98:     # vetëm monedha me histori të plotë
+                    frames[sym] = (df, fetch_daily(exchange, sym, cfg, df))
+                    print(f"  {sym}: {len(df)} qirinj", flush=True)
+            except Exception as e:
+                print(f"  {sym}: u anashkalua ({e})")
+        market = None
+        if cfg.market_filter_symbol:
+            m = fetch_candles(exchange, cfg.market_filter_symbol, cfg.timeframe, cfg.candles)
+            market = (m, fetch_daily(exchange, cfg.market_filter_symbol, cfg, m))
+        print(format_portfolio(portfolio_backtest(frames, cfg, market), cfg))
     elif a.komanda == "backtest":
         for sym in cfg.symbols:
             df = fetch_candles(exchange, sym, cfg.timeframe, cfg.candles)

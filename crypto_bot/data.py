@@ -45,6 +45,8 @@ def connect(cfg, with_keys: bool = False):
     exchange = make_exchange(cfg, with_keys)
     if hasattr(exchange, "account_currency"):
         cfg.quote = exchange.account_currency()
+    if hasattr(exchange, "server_tz") and cfg.market_filter_symbol == "BTC/USDT":
+        cfg.market_filter_symbol = ""   # filtri i tregut të kriptove nuk ka kuptim për simbolet e MT5
     if cfg.data_tz == "auto":   # bursat japin kohën në UTC; MT5 në orën e serverit të brokerit
         cfg.data_tz = exchange.server_tz(cfg.symbols[0]) if hasattr(exchange, "server_tz") else "UTC"
     return exchange

@@ -109,3 +109,90 @@ def format_backtest(r: dict, cfg, symbol: str) -> str:
         f"faktori i fitimit: {r['profit_factor']:.2f} | rënia maksimale: {r['max_drawdown_pct']:.2f}%",
         f"Në njësi rreziku (R): mesatarisht {r['avg_r']:+.2f}R për tregti, gjithsej {r['total_r']:+.1f}R",
     ])
+
+
+def portfolio_backtest(frames: dict, cfg, market=None) -> dict:
+    """Simulon robotin mbi shumë monedha me kapital të përbashkët, ashtu siç punon realisht.
+
+    `frames`: {simboli: (qirinjtë, qirinjtë ditorë)}; `market`: (qirinjtë, ditorët) e tregut të filtrit
+    (p.sh. BTC) ose None. Vetëm blerje (long). Rregullat: deri në `max_open_positions` pozicione, madhësia
+    sipas rrezikut, hyrje në hapjen e qiririt pas sinjalit, më të mirat sipas pikëve të parat.
+    """
+    import pandas as pd
+
+    from .strategy import daily_trend
+
+    syms = list(frames)
+    idx = max((frames[k][0].index for k in syms), key=len)
+    sig = {k: signal_frame(df, cfg, daily).reindex(idx) for k, (df, daily) in frames.items()}
+    col = lambda name, kind=float: np.column_stack([sig[k][name].to_numpy(kind) for k in syms])
+    o, h, l, c, score, atr = (col(n) for n in ["open", "high", "low", "close", "score", "atr"])
+    buy = np.column_stack([sig[k]["buy"].fillna(False).to_numpy(bool) for k in syms])
+    sell = np.column_stack([sig[k]["sell"].fillna(False).to_numpy(bool) for k in syms])
+    up = np.ones(len(idx), bool)
+    if market is not None and cfg.market_filter_symbol:
+        up = daily_trend(market[0], cfg, market[1]).reindex(idx).fillna(False).to_numpy(bool)
+    fee, cash, pos, trades, equity = cfg.fee_pct / 100, float(cfg.paper_balance), {}, [], []
+    start = warmup(cfg) + 1
+
+    def close(j, i, price, reason):
+        nonlocal cash
+        p = pos.pop(j)
+        got = p["qty"] * price * (1 - fee)
+        cash += got
+        trades.append({"symbol": syms[j], "entry_time": str(idx[p["i"]]), "exit_time": str(idx[i]), "entry": p["entry"],
+                       "exit": price, "reason": reason, "pnl": got - p["cost"], "pnl_pct": (got / p["cost"] - 1) * 100})
+
+    for i in range(start, len(idx)):
+        for j in [j for j in pos if sell[i - 1, j] and not np.isnan(o[i, j])]:
+            close(j, i, o[i, j], "sinjal")
+        if len(pos) < cfg.max_open_positions and up[i - 1]:
+            wanted = sorted((j for j in range(len(syms)) if buy[i - 1, j] and j not in pos and not np.isnan(o[i, j])),
+                            key=lambda j: -np.nan_to_num(score[i - 1, j], nan=-999))
+            total = cash + sum(p["qty"] * c[i - 1, j] for j, p in pos.items())
+            for j in wanted[: cfg.max_open_positions - len(pos)]:
+                stop_pct = stop_distance_pct(cfg, o[i, j], atr[i - 1, j])
+                cost = min(position_cost(cfg, total, stop_pct), cash)
+                if cost <= 0:
+                    break
+                pos[j] = {"i": i, "entry": o[i, j], "qty": cost * (1 - fee) / o[i, j], "cost": cost,
+                          "sl": o[i, j] * (1 - stop_pct / 100)}
+                cash -= cost
+        for j in [j for j in pos if l[i, j] <= pos[j]["sl"]]:
+            close(j, i, min(o[i, j], pos[j]["sl"]), "stop-loss")
+        equity.append(cash + sum(p["qty"] * (c[i, j] if not np.isnan(c[i, j]) else p["entry"]) for j, p in pos.items()))
+
+    eq = pd.Series(equity, index=idx[start:])
+    monthly = eq.resample("ME").last().pct_change().dropna() * 100
+    peak = eq.cummax()
+    half = len(eq) // 2
+    hold = [frames[k][0]["close"].iloc[-1] / frames[k][0]["close"].iloc[min(start, len(frames[k][0]) - 1)] - 1 for k in syms]
+    return {
+        "symbols": len(syms), "from": str(idx[start].date()), "to": str(idx[-1].date()),
+        "start": float(cfg.paper_balance), "end": float(eq.iloc[-1]),
+        "return_pct": (eq.iloc[-1] / cfg.paper_balance - 1) * 100,
+        "first_half_pct": (eq.iloc[half] / cfg.paper_balance - 1) * 100,
+        "second_half_pct": (eq.iloc[-1] / eq.iloc[half] - 1) * 100,
+        "max_drawdown_pct": float(((peak - eq) / peak).max() * 100),
+        "buy_hold_pct": float(np.mean(hold) * 100),
+        "trades": len(trades), "win_rate_pct": sum(t["pnl"] > 0 for t in trades) / len(trades) * 100 if trades else 0.0,
+        "months_up": int((monthly > 0.05).sum()), "months_flat": int((monthly.abs() <= 0.05).sum()),
+        "months_down": int((monthly < -0.05).sum()),
+        "worst_month_pct": float(monthly.min()) if len(monthly) else 0.0,
+        "best_month_pct": float(monthly.max()) if len(monthly) else 0.0,
+        "monthly": monthly, "equity": eq, "trade_list": trades,
+    }
+
+
+def format_portfolio(r: dict, cfg) -> str:
+    return "\n".join([
+        f"=== Portofoli: {r['symbols']} monedha, {r['from']} – {r['to']} | deri në {cfg.max_open_positions} pozicione, "
+        f"rrezik {cfg.risk_per_trade_pct:g}% për tregti ===",
+        f"Kapitali: {r['start']:.2f} → {r['end']:.2f}  ({r['return_pct']:+.2f}%) | rënia maksimale: {r['max_drawdown_pct']:.1f}%",
+        f"Gjysma e parë: {r['first_half_pct']:+.1f}% | gjysma e dytë: {r['second_half_pct']:+.1f}%",
+        f"Muajt: {r['months_up']} me fitim, {r['months_flat']} rreth zeros, {r['months_down']} me humbje | "
+        f"më i miri {r['best_month_pct']:+.1f}%, më i keqi {r['worst_month_pct']:+.1f}%",
+        f"Tregti: {r['trades']} | fituese: {r['win_rate_pct']:.0f}%",
+        f"Mbajtja pa tregtuar e të gjitha monedhave (mesatarja): {r['buy_hold_pct']:+.1f}%",
+        "Kujdes: monedhat janë zgjedhur sipas volumit të sotëm, pra janë ato që mbijetuan; rezultati real ka gjasa të dalë më i dobët.",
+    ])
