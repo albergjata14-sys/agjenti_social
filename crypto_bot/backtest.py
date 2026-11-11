@@ -155,11 +155,14 @@ def portfolio_backtest(frames: dict, cfg, market=None) -> dict:
                 cost = min(position_cost(cfg, total, stop_pct), cash)
                 if cost <= 0:
                     break
-                pos[j] = {"i": i, "entry": o[i, j], "qty": cost * (1 - fee) / o[i, j], "cost": cost,
-                          "sl": o[i, j] * (1 - stop_pct / 100)}
+                sl, tp = exit_prices(cfg, o[i, j], stop_pct)
+                pos[j] = {"i": i, "entry": o[i, j], "qty": cost * (1 - fee) / o[i, j], "cost": cost, "sl": sl, "tp": tp}
                 cash -= cost
-        for j in [j for j in pos if l[i, j] <= pos[j]["sl"]]:
-            close(j, i, min(o[i, j], pos[j]["sl"]), "stop-loss")
+        for j in list(pos):     # stop-i kontrollohet i pari: rasti më i keq kur preken të dy brenda një qiriri
+            if l[i, j] <= pos[j]["sl"]:
+                close(j, i, min(o[i, j], pos[j]["sl"]), "stop-loss")
+            elif pos[j]["tp"] and h[i, j] >= pos[j]["tp"]:
+                close(j, i, max(o[i, j], pos[j]["tp"]), "take-profit")
         equity.append(cash + sum(p["qty"] * (c[i, j] if not np.isnan(c[i, j]) else p["entry"]) for j, p in pos.items()))
 
     eq = pd.Series(equity, index=idx[start:])

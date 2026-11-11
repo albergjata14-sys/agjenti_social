@@ -110,7 +110,7 @@ class Broker:
             self.state["cash"] += proceeds
         trade = {"symbol": symbol, "side": "long" if side > 0 else "short", "entry": pos["entry"], "exit": price,
                  "reason": reason, "pnl": proceeds - pos["cost"], "pnl_pct": (proceeds / pos["cost"] - 1) * 100,
-                 "closed": time.time()}
+                 "opened": pos.get("opened"), "closed": time.time()}
         del self.positions[symbol]
         self.state["trades"].append(trade)
         self.save()

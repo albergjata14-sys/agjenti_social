@@ -8,3 +8,4 @@ crypto_bot_predictions*.jsonl
 crypto_bot_manual*.json
 crypto_bot_output.log
 *.stop
+crypto_bot_ui_config.json

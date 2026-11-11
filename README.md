@@ -14,12 +14,21 @@ gjithë tregun e platformës dhe mund të blejë/shesë vetë me fitim dhe humbj
 
 Në Windows: dopio-klik te `start_robot.bat`. Hapet në shfletues te `http://localhost:8510`
 (herën e parë instalon vetë libraritë). Në sisteme të tjera: `streamlit run crypto_app.py`.
+I njëjti panel gjendet edhe te `app.py`, si zgjedhja "Crypto Trading Agent".
 
-- **Grafiku dhe pikat e hyrjes** – qirinjtë me nivelet e planit (blerje mbi, stop-loss, dalje nga trendi)
-  dhe një portofol demo më vete për provat e tua me dorë.
-- **Skanimi i tregut** – monedhat më të tregtuara, të renditura sipas afërsisë me sinjalin e blerjes.
-- **Roboti (demo)** – butonat Nis / Ndalo, kapitali, pozicionet, tregtitë dhe vendimet e fundit.
-- **Ditari i parashikimeve** dhe **Prova në të kaluarën**.
+- **Grafiku** – qirinjtë e gjallë (rifreskim çdo 15 sekonda), një fjali që thotë çfarë po bën roboti,
+  vijat Hyrja / Stop-loss / Fitimi (TP) të pozicionit të hapur dhe trekëndësha për çdo hyrje e dalje.
+  Poshtë janë butonat Bli / Shit short / Mbyll për provat me dorë me para demo.
+- **Roboti** – Nis / Ndalo, kapitali demo, pozicionet, tregtitë dhe arsyet e vendimeve. Roboti niset
+  me rregullimet që shihen në panel.
+- **Tregu** – monedhat më të tregtuara, të renditura sipas afërsisë me sinjalin e blerjes.
+- **Prova** – prova në të kaluarën dhe ditari i parashikimeve.
+
+Dy mënyra: **E kujdesshme** (parazgjedhja: pak tregti, vetëm në trend rritës) dhe **Demonstrim (aktiv)**
+(qirinj 1-orësh, fitim 3%, stop 1%, pa filtra), që hap shumë tregti për ta parë robotin në veprim.
+Te "Rregullime" vendosen stop-loss dhe fitimi në përqindje. Në provat mbi të dhëna reale (4 monedha,
+15m dhe 1h, 10 muaj) asnjë nga 60 kombinimet me fitime të vogla nuk doli me fitim, ndaj mënyra e
+demonstrimit është vetëm për para demo.
 
 Roboti i nisur nga paneli vazhdon të punojë edhe kur mbyllet faqja; ndalet me butonin Ndalo.
 
