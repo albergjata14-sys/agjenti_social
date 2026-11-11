@@ -10,6 +10,19 @@ gjithë tregun e platformës dhe mund të blejë/shesë vetë me fitim dhe humbj
 > ⚠️ Nuk është këshillë financiare. Asnjë robot nuk e parashikon tregun me siguri – parashikimi është
 > vlerësim statistikor. Nis gjithmonë në simulim dhe rrezikoni vetëm para që përballoni t'i humbni.
 
+### Aplikacioni
+
+Në Windows: dopio-klik te `start_robot.bat`. Hapet në shfletues te `http://localhost:8510`
+(herën e parë instalon vetë libraritë). Në sisteme të tjera: `streamlit run crypto_app.py`.
+
+- **Grafiku dhe pikat e hyrjes** – qirinjtë me nivelet e planit (blerje mbi, stop-loss, dalje nga trendi)
+  dhe një portofol demo më vete për provat e tua me dorë.
+- **Skanimi i tregut** – monedhat më të tregtuara, të renditura sipas afërsisë me sinjalin e blerjes.
+- **Roboti (demo)** – butonat Nis / Ndalo, kapitali, pozicionet, tregtitë dhe vendimet e fundit.
+- **Ditari i parashikimeve** dhe **Prova në të kaluarën**.
+
+Roboti i nisur nga paneli vazhdon të punojë edhe kur mbyllet faqja; ndalet me butonin Ndalo.
+
 ### Instalimi
 
 ```bash

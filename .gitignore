@@ -5,3 +5,6 @@ crypto_bot_state*.json
 crypto_bot_state*.tmp
 crypto_bot_decisions*.jsonl
 crypto_bot_predictions*.jsonl
+crypto_bot_manual*.json
+crypto_bot_output.log
+*.stop

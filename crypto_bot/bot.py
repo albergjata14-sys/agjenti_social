@@ -1,6 +1,7 @@
 """Cikli kryesor i robotit: skanon tregun, analizon, hap dhe mbyll pozicione."""
 import json
 import time
+from pathlib import Path
 from datetime import datetime, timezone
 
 from .data import fetch_candles, fetch_daily, spread_pct, top_symbols
@@ -9,6 +10,22 @@ from .strategy import analyze
 
 def log(msg: str):
     print(f"[{datetime.now():%Y-%m-%d %H:%M:%S}] {msg}", flush=True)
+
+
+_skipped = set()
+
+
+def stop_file(cfg) -> Path:
+    """Skedari që i kërkon robotit të ndalet (e krijon paneli me butonin Ndalo)."""
+    return Path(cfg.state_file + ".stop")
+
+
+def is_running(cfg, state=None) -> bool:
+    """A po punon një robot mbi këtë skedar gjendjeje? (sipas rrahjes së fundit të ruajtur)"""
+    if state is None:
+        p = Path(cfg.state_file)
+        state = json.loads(p.read_text()) if p.exists() else {}
+    return time.time() - state.get("heartbeat", 0) < cfg.poll_seconds * 2 + 30
 
 
 def watchlist(exchange, cfg) -> list:
@@ -23,7 +40,9 @@ def scan(exchange, cfg, symbols=None) -> list:
             df = fetch_candles(exchange, sym, cfg.timeframe, cfg.candles)
             results.append(analyze(df, cfg, sym, daily=fetch_daily(exchange, sym, cfg, df)))
         except Exception as e:  # një monedhë e dështuar nuk duhet të ndalë skanimin
-            log(f"{sym}: u anashkalua ({e})")
+            if sym not in _skipped:  # njofto vetëm herën e parë, jo në çdo cikël
+                _skipped.add(sym)
+                log(f"{sym}: u anashkalua ({e})")
     return sorted(results, key=lambda a: a["score"], reverse=True)
 
 
@@ -118,6 +137,7 @@ def run_cycle(exchange, broker, cfg) -> list:
         if new_candle:
             record(cfg, symbol=sym, action="ANASHKALO" if a["signal"] == "BLI" else a["signal"],
                    reason=skip, price=a["price"], score=a["score"])
+    st["heartbeat"] = time.time()
     broker.save()
     log(f"Kapitali: {broker.equity(prices):.2f} {cfg.quote} (sot {day_pct:+.2f}%"
         f"{', BLERJET TË NDALURA' if halted else ''}) | pozicione të hapura: "
@@ -126,12 +146,25 @@ def run_cycle(exchange, broker, cfg) -> list:
 
 
 def run_forever(exchange, broker, cfg):
+    if is_running(cfg, broker.state):
+        raise RuntimeError("Roboti po punon tashmë mbi këtë gjendje (në një dritare tjetër ose nga paneli).")
+    stop = stop_file(cfg)
+    stop.unlink(missing_ok=True)
     log(f"Roboti u nis në modalitetin {'REAL' if broker.live else 'SIMULIM'} në {cfg.exchange}. Ctrl+C për ta ndalur.")
-    while True:
-        try:
-            run_cycle(exchange, broker, cfg)
-        except KeyboardInterrupt:
-            raise
-        except Exception as e:
-            log(f"Gabim në cikël (do të riprovohet): {e}")
-        time.sleep(cfg.poll_seconds)
+    try:
+        while not stop.exists():
+            try:
+                run_cycle(exchange, broker, cfg)
+            except Exception as e:
+                log(f"Gabim në cikël (do të riprovohet): {e}")
+                broker.state["heartbeat"] = time.time()
+                broker.save()
+            for _ in range(int(cfg.poll_seconds)):
+                if stop.exists():
+                    break
+                time.sleep(1)
+        log("Roboti u ndal nga paneli.")
+    finally:
+        stop.unlink(missing_ok=True)
+        broker.state["heartbeat"] = 0
+        broker.save()

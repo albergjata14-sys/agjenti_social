@@ -109,8 +109,7 @@ def analyze(df: pd.DataFrame, cfg, symbol: str = "", horizon: int = 12, daily=No
                f"pa thyerje: duhet mbyllje mbi {last['breakout_high']:.6g}"
                + ("" if up else f" dhe mbi EMA{cfg.trend_ema} ({last['trend_ema']:.6g})"))
         if signal != "SHIT" and not last["daily_up"]:
-            why = (f"trendi ditor nuk është rritës (çmimi nën EMA{cfg.daily_trend_ema} ditore, "
-                   f"ose histori ditore e pamjaftueshme); {why}" if signal == "PRIT" else why)
+            why = f"trendi ditor jo rritës (nën EMA{cfg.daily_trend_ema} ditore); {why}" if signal == "PRIT" else why
     else:
         why = f"pikët {score:+.0f} (blerje ≥ {cfg.buy_threshold:g}, shitje ≤ {cfg.sell_threshold:g})"
     recent = s.tail(50)
