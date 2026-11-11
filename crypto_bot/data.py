@@ -40,11 +40,12 @@ def make_exchange(cfg, with_keys: bool = False):
     return exchange
 
 
-def adapt_config(cfg, exchange):
-    """Përshtat konfigurimin me platformën: në MT5 monedha bazë është ajo e llogarisë (p.sh. USD)."""
+def connect(cfg, with_keys: bool = False):
+    """Krijon lidhjen dhe përshtat `cfg` me platformën: në MT5 monedha bazë është ajo e llogarisë."""
+    exchange = make_exchange(cfg, with_keys)
     if hasattr(exchange, "account_currency"):
         cfg.quote = exchange.account_currency()
-    return cfg
+    return exchange
 
 
 def to_frame(rows) -> pd.DataFrame:

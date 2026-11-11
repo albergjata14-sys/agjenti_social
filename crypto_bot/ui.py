@@ -15,7 +15,7 @@ from .backtest import backtest
 from .bot import is_running, scan, stop_file
 from .broker import Broker
 from .config import load_config
-from .data import adapt_config, fetch_candles, fetch_daily, make_exchange
+from .data import fetch_candles, fetch_daily, make_exchange
 from .strategy import analyze, signal_frame
 
 PLATFORMS = ["mexc", "binance", "bybit", "mt5"]
@@ -316,7 +316,9 @@ def render():
     stop = c[3].number_input("Stop-loss %", 0.5, 50.0, float(base.stop_loss_pct), 0.5)
     try:
         cfg = load_config(exchange=name, symbols=[symbol], timeframe=timeframe, stop_loss_pct=stop)
-        exchange = adapt_config(cfg, _exchange(name, False))
+        exchange = _exchange(name, False)
+        if hasattr(exchange, "account_currency"):   # MT5: monedha bazë është ajo e llogarisë
+            cfg.quote = exchange.account_currency()
     except Exception as e:
         return st.error(f"Gabim: {e}")
     tabs = st.tabs(["Grafiku dhe pikat e hyrjes", "Skanimi i tregut", "Roboti (demo)", "Ditari i parashikimeve",

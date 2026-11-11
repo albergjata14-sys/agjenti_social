@@ -417,9 +417,14 @@ def test_mt5_adapter(tmp_path):
     with pytest.raises(ValueError):
         ex.fetch_ticker("NUKKA")
 
-    from crypto_bot.data import adapt_config
+    import crypto_bot.data as data
 
-    cfg = adapt_config(Config(exchange="mt5", state_file=str(tmp_path / "mt5.json"), fee_pct=0), ex)
+    cfg = Config(exchange="mt5", state_file=str(tmp_path / "mt5.json"), fee_pct=0)
+    real, data.make_exchange = data.make_exchange, lambda c, with_keys=False: ex
+    try:
+        assert data.connect(cfg) is ex
+    finally:
+        data.make_exchange = real
     assert cfg.quote == "USD" and "DEMO" in ex.account_label()   # monedha merret nga llogaria
     b = Broker(cfg, ex)
     pos = b.buy("BTCUSD", 100.0, 1000.0)                          # 1% rrezik / 8% stop = 125 USD → 1.25 lote
@@ -469,3 +474,29 @@ def test_prediction_journal(tmp_path):
     text = journal.report(path)
     assert "mexc-ai" in text and "100%" in text and "0%" in text and "në pritje" in text
     assert "bosh" in journal.report(tmp_path / "nuk-ka.jsonl")
+
+
+def test_cli_commands(tmp_path, monkeypatch, capsys):
+    """Komandat e rreshtit të komandës, nga fillimi në fund, mbi një platformë të rreme."""
+    import crypto_bot.__main__ as cli
+
+    ex = make_fake({"BTC/USDT": trend(700, 100, 0.002), "ETH/USDT": trend(700, 100, -0.002)})
+    ex.t = {"BTC/USDT": {"quoteVolume": 5}, "ETH/USDT": {"quoteVolume": 3}}
+    monkeypatch.setattr(cli, "connect", lambda cfg, with_keys=False: ex)
+    monkeypatch.chdir(tmp_path)
+    cfgfile = tmp_path / "c.json"
+    cfgfile.write_text(json.dumps({"candles": 400, "daily_trend_ema": 0}))
+    base = ["--config", str(cfgfile)]
+
+    cli.main(["analizo", "--symbol", "BTC/USDT,ETH/USDT", *base])
+    out = capsys.readouterr().out
+    assert "=== BTC/USDT" in out and "=== ETH/USDT" in out and "Plani:" in out
+    cli.main(["skano", *base])
+    out = capsys.readouterr().out
+    assert "2 monedha" in out and "Blerje mbi" in out
+    cli.main(["backtest", "--candles", "600", *base])
+    assert "Backtest BTC/USDT" in capsys.readouterr().out
+    cli.main(["ditar", "shto", "--drejtimi", "rënie", "--ore", "24", *base])
+    assert "U shtua: mexc-ai parashikon rënie" in capsys.readouterr().out
+    with pytest.raises(ValueError):
+        cli.main(["ditar", "shto", *base])

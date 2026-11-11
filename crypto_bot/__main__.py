@@ -6,7 +6,7 @@ from .backtest import backtest, format_backtest
 from .bot import run_forever, scan
 from .broker import Broker
 from .config import load_config
-from .data import adapt_config, fetch_candles, fetch_daily, make_exchange
+from .data import connect, fetch_candles, fetch_daily
 from .strategy import format_report
 
 
@@ -40,7 +40,7 @@ def main(argv=None):
                       scan_market=True if a.gjithe_tregun else None)
 
     if a.komanda == "nis":
-        exchange = adapt_config(cfg, make_exchange(cfg, with_keys=a.live))
+        exchange = connect(cfg, with_keys=a.live)
         if a.live:
             what = ("urdhra në rrjetin e TESTIMIT (para demo)" if cfg.testnet else
                     f"urdhra në llogarinë MT5 {exchange.account_label()}" if hasattr(exchange, "account_label") else
@@ -53,7 +53,7 @@ def main(argv=None):
             cfg.log_file = cfg.log_file.replace(".jsonl", tag + ".jsonl")
         return run_forever(exchange, Broker(cfg, exchange if a.live else None), cfg)
 
-    exchange = adapt_config(cfg, make_exchange(cfg))
+    exchange = connect(cfg)
     if a.komanda == "ditar":
         path = cfg.predictions_file
         if a.veprimi == "shto":
