@@ -118,6 +118,18 @@ Gjendja e verifikimit: MEXC u provua me të dhëna reale. Binance, Bybit dhe MT5
 teste të simuluara; urdhrat realë nuk janë provuar në asnjë platformë. Provoji së pari në simulim,
 pastaj në testnet / llogari demo.
 
+### Ditari i parashikimeve
+
+Për të matur sa i saktë është një burim parashikimesh (p.sh. "AI Analysis" i MEXC):
+
+```bash
+python -m crypto_bot ditar shto --drejtimi rënie --ore 24 --perqindja 74 --objektivi 73200
+python -m crypto_bot ditar        # mbyll parashikimet që u ka ardhur afati dhe shfaq saktësinë
+```
+
+Çdo shtim regjistron edhe drejtimin që jep roboti në të njëjtin çast, për krahasim. Me më pak se 30
+parashikime të mbyllura, përqindja nuk tregon ende asgjë.
+
 ### Regjistri i vendimeve
 
 Çdo blerje, shitje dhe mosblerje shkruhet me arsyen te `crypto_bot_decisions.jsonl` (një rresht JSON

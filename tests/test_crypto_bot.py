@@ -435,3 +435,33 @@ def test_mt5_adapter(tmp_path):
     # Sasi nën minimumin e brokerit nuk blihet.
     assert Broker(Config(**{**cfg.__dict__, "state_file": str(tmp_path / "m2.json"), "position_size_pct": 0.01}),
                   ex).buy("BTCUSD", 100.0, 1000.0) is None
+
+
+def test_prediction_journal(tmp_path):
+    from datetime import timedelta
+
+    from crypto_bot import journal
+
+    path = tmp_path / "p.jsonl"
+    closes = np.r_[np.full(300, 100.0), np.linspace(100, 90, 100)]   # e sheshtë, pastaj rënie në 90
+    ex = make_fake({"BTC/USDT": closes})
+    df = ex.data["BTC/USDT"]
+    t0 = df.index[310].to_pydatetime()                              # çasti i parashikimit
+    now = df.index[-1].to_pydatetime()
+    price = float(df["open"].iloc[310])
+    journal.add(path, "mexc-ai", "BTC/USDT", "rënie", 24, price, 74, target=97.0, now=t0)
+    journal.add(path, "roboti", "BTC/USDT", "rritje", 24, price, now=t0)
+    journal.add(path, "mexc-ai", "BTC/USDT", "renie", 24, 90.0, now=now)   # afati ende s'ka ardhur
+    with pytest.raises(ValueError):
+        journal.add(path, "x", "BTC/USDT", "anash", 24, 1.0)
+
+    assert journal.check(path, ex, now=now + timedelta(minutes=30)) == 2
+    a, b, c = journal.load(path)
+    assert a["correct"] is True and a["target_hit"] is True
+    assert a["result_price"] == pytest.approx(float(df["open"].iloc[334]))
+    assert b["correct"] is False and b["target_hit"] is None
+    assert c["correct"] is None
+    assert journal.check(path, ex, now=now + timedelta(minutes=30)) == 0   # nuk rillogaritet
+    text = journal.report(path)
+    assert "mexc-ai" in text and "100%" in text and "0%" in text and "në pritje" in text
+    assert "bosh" in journal.report(tmp_path / "nuk-ka.jsonl")

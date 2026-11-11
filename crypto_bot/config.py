@@ -38,6 +38,7 @@ class Config:
     poll_seconds: int = 60
     state_file: str = "crypto_bot_state.json"
     log_file: str = "crypto_bot_decisions.jsonl"   # çdo vendim me arsyen ("" = pa regjistër)
+    predictions_file: str = "crypto_bot_predictions.jsonl"   # ditari i parashikimeve (komanda `ditar`)
 
     def validate(self):
         if self.strategy not in ("breakout", "score"):

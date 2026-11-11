@@ -30,5 +30,6 @@
   "paper_balance": 1000.0,
   "poll_seconds": 60,
   "state_file": "crypto_bot_state.json",
-  "log_file": "crypto_bot_decisions.jsonl"
+  "log_file": "crypto_bot_decisions.jsonl",
+  "predictions_file": "crypto_bot_predictions.jsonl"
 }

@@ -1,6 +1,7 @@
 """Rreshti i komandës:  python -m crypto_bot {analizo|skano|backtest|nis}"""
 import argparse
 
+from . import journal
 from .backtest import backtest, format_backtest
 from .bot import run_forever, scan
 from .broker import Broker
@@ -11,7 +12,13 @@ from .strategy import format_report
 
 def main(argv=None):
     p = argparse.ArgumentParser(prog="crypto_bot", description="Robot analize dhe tregtimi për kriptomonedha")
-    p.add_argument("komanda", choices=["analizo", "skano", "backtest", "nis"])
+    p.add_argument("komanda", choices=["analizo", "skano", "backtest", "nis", "ditar"])
+    p.add_argument("veprimi", nargs="?", choices=["shto"], help="vetëm për 'ditar': shto një parashikim")
+    p.add_argument("--drejtimi", choices=["rritje", "renie", "rënie"], help="ditar: drejtimi i parashikuar")
+    p.add_argument("--ore", type=float, default=24, help="ditar: afati i parashikimit në orë")
+    p.add_argument("--perqindja", type=float, help="ditar: sa %% siguri jep burimi")
+    p.add_argument("--objektivi", type=float, help="ditar: çmimi objektiv i parashikuar")
+    p.add_argument("--burimi", default="mexc-ai", help="ditar: kush e dha parashikimin")
     p.add_argument("--config", help="rruga e config.json")
     p.add_argument("--symbol", help="p.sh. BTC/USDT")
     p.add_argument("--exchange", help="mexc, binance, bybit ose mt5")
@@ -47,6 +54,27 @@ def main(argv=None):
         return run_forever(exchange, Broker(cfg, exchange if a.live else None), cfg)
 
     exchange = make_exchange(cfg)
+    if a.komanda == "ditar":
+        path = cfg.predictions_file
+        if a.veprimi == "shto":
+            if not a.drejtimi:
+                raise ValueError("jep --drejtimi rritje ose --drejtimi rënie")
+            sym = cfg.symbols[0]
+            price = float(exchange.fetch_ticker(sym)["last"])
+            e = journal.add(path, a.burimi, sym, a.drejtimi, a.ore, price, a.perqindja, a.objektivi)
+            print(f"U shtua: {e['source']} parashikon {e['direction']} për {sym} brenda {a.ore:g} orësh (çmimi tani {price:.6g})")
+            # Për krahasim regjistrohet edhe mendimi i robotit në të njëjtin çast.
+            mine = scan(exchange, cfg, [sym])
+            if mine and mine[0]["direction"] != "ANASH":
+                d = "rritje" if mine[0]["direction"] == "RRITJE" else "rënie"
+                journal.add(path, "roboti", sym, d, a.ore, price)
+                print(f"U shtua: roboti parashikon {d} (pikët {mine[0]['score']:+.0f})")
+            else:
+                print("Roboti nuk ka drejtim të qartë tani, ndaj nuk u regjistrua parashikim i tij.")
+        closed = journal.check(path, exchange)
+        if closed:
+            print(f"U mbyllën {closed} parashikime që u erdhi afati.")
+        return print(journal.report(path))
     if a.komanda == "analizo":
         for r in scan(exchange, cfg, cfg.symbols):
             print(format_report(r, cfg), end="\n\n")
