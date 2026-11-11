@@ -30,6 +30,7 @@ def main(argv=None):
     p.add_argument("--trailing", type=float, dest="trailing_stop_pct", help="trailing stop në %%")
     p.add_argument("--candles", type=int, help="numri i qirinjve historikë")
     p.add_argument("--gjithe-tregun", action="store_true", help="skano gjithë tregun, jo vetëm listën")
+    p.add_argument("--short", action="store_true", help="lejo edhe shitje short (vetëm MT5 ose simulim)")
     p.add_argument("--live", action="store_true", help="tregto me para reale (kërkon çelësat API)")
     a = p.parse_args(argv)
 
@@ -37,10 +38,13 @@ def main(argv=None):
                       strategy=a.strategy, take_profit_pct=a.take_profit_pct, stop_loss_pct=a.stop_loss_pct,
                       trailing_stop_pct=a.trailing_stop_pct,
                       symbols=[x.strip() for x in a.symbol.split(",") if x.strip()] if a.symbol else None,
-                      scan_market=True if a.gjithe_tregun else None)
+                      scan_market=True if a.gjithe_tregun else None,
+                      allow_short=True if a.short else None)
 
     if a.komanda == "nis":
         exchange = connect(cfg, with_keys=a.live)
+        if a.live and cfg.allow_short and not getattr(exchange, "stop_on_order", False):
+            raise ValueError("shitja short me urdhra realë punon vetëm në MT5; në platformat spot përdor simulimin")
         if a.live:
             what = ("urdhra në rrjetin e TESTIMIT (para demo)" if cfg.testnet else
                     f"urdhra në llogarinë MT5 {exchange.account_label()}" if hasattr(exchange, "account_label") else
@@ -81,7 +85,7 @@ def main(argv=None):
     elif a.komanda == "skano":
         cfg.scan_market = True
         rows = scan(exchange, cfg)
-        rows.sort(key=lambda r: ({"BLI": 0, "PRIT": 1, "SHIT": 2}[r["signal"]], -r["score"]))
+        rows.sort(key=lambda r: ({"BLI": 0, "SHORT": 1, "PRIT": 2, "SHIT": 3}[r["signal"]], -r["score"]))
         if cfg.strategy == "breakout":
             # "Larg" = sa % duhet të ngjitet çmimi që një mbyllje të japë sinjal blerjeje.
             print(f"{'Monedha':<16}{'Çmimi':>12}{'Pikët':>8}  {'Sinjali':<8}{'Blerje mbi':>12}{'Larg':>8}  Trendi ditor")
@@ -94,6 +98,8 @@ def main(argv=None):
             for r in rows:
                 print(f"{r['symbol']:<16}{r['price']:>12.6g}{r['score']:>+8.1f}  {r['signal']:<8}{r['signal_reason']}")
         buys = sum(r["signal"] == "BLI" for r in rows)
+        if cfg.allow_short:
+            print(f"\nSinjale short: {', '.join(r['symbol'] for r in rows if r['signal'] == 'SHORT') or 'asnjë'}")
         print(f"\n{len(rows)} monedha | sinjale blerjeje: {buys} | trend ditor rritës: {sum(r['daily_up'] for r in rows)}")
     elif a.komanda == "backtest":
         for sym in cfg.symbols:

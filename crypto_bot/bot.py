@@ -70,7 +70,7 @@ def _sell(broker, cfg, sym, price, reason, actions, score=None):
     actions.append(("SHIT", sym, t))
     record(cfg, symbol=sym, action="SHIT", reason=reason, price=t["exit"], score=score,
            pnl=round(t["pnl"], 4), pnl_pct=round(t["pnl_pct"], 2))
-    log(f"SHIT {sym} @ {t['exit']:.6g} ({reason}) → {t['pnl']:+.2f} {cfg.quote} ({t['pnl_pct']:+.2f}%)")
+    log(f"MBYLL {t['side']} {sym} @ {t['exit']:.6g} ({reason}) → {t['pnl']:+.2f} {cfg.quote} ({t['pnl_pct']:+.2f}%)")
 
 
 def run_cycle(exchange, broker, cfg) -> list:
@@ -90,7 +90,8 @@ def run_cycle(exchange, broker, cfg) -> list:
     for a in results:
         sym = a["symbol"]
         prices.setdefault(sym, a["price"])
-        if sym in broker.positions and a["signal"] == "SHIT":
+        pos = broker.positions.get(sym)
+        if pos and (a["exit_long"] if pos.get("side", 1) > 0 else a["exit_short"]):
             _sell(broker, cfg, sym, prices[sym], "sinjal: " + a["signal_reason"], actions, a["score"])
 
     # 3) Kufiri ditor i humbjes: pasi preket, sot nuk hapen blerje të reja.
@@ -111,7 +112,7 @@ def run_cycle(exchange, broker, cfg) -> list:
         sym, new_candle = a["symbol"], seen.get(a["symbol"]) != a["time"]
         seen[sym] = a["time"]
         skip = None
-        if a["signal"] != "BLI":
+        if a["signal"] not in ("BLI", "SHORT"):
             skip = a["signal_reason"]
         elif sym in broker.positions:
             skip = "pozicioni është tashmë i hapur"
@@ -124,18 +125,18 @@ def run_cycle(exchange, broker, cfg) -> list:
         elif cfg.max_spread_pct and (spread := spread_pct(exchange, sym) or 0) > cfg.max_spread_pct:
             skip = f"diferenca blerje/shitje shumë e madhe ({spread:.2f}% > {cfg.max_spread_pct:g}%)"
         else:
-            pos = broker.buy(sym, a["price"], equity, a["plan"]["stop_pct"])
+            pos = broker.buy(sym, a["price"], equity, a["plan"]["stop_pct"], a["side"])
             if pos:
                 entered[sym] = a["time"]
-                actions.append(("BLI", sym, pos))
-                record(cfg, symbol=sym, action="BLI", reason=a["signal_reason"], price=pos["entry"],
+                actions.append((a["signal"], sym, pos))
+                record(cfg, symbol=sym, action=a["signal"], reason=a["signal_reason"], price=pos["entry"],
                        score=a["score"], stop_loss=pos["sl"], take_profit=pos["tp"])
-                log(f"BLI {sym} @ {pos['entry']:.6g} ({a['signal_reason']}) | fitim → "
+                log(f"{a['signal']} {sym} @ {pos['entry']:.6g} ({a['signal_reason']}) | fitim → "
                     f"{'%.6g' % pos['tp'] if pos['tp'] else 'i hapur'} | stop → {pos['sl']:.6g}")
                 continue
             skip = "fonde të pamjaftueshme ose nën minimumin e platformës"
         if new_candle:
-            record(cfg, symbol=sym, action="ANASHKALO" if a["signal"] == "BLI" else a["signal"],
+            record(cfg, symbol=sym, action="ANASHKALO" if a["signal"] in ("BLI", "SHORT") else a["signal"],
                    reason=skip, price=a["price"], score=a["score"])
     st["heartbeat"] = time.time()
     broker.save()

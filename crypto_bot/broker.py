@@ -4,7 +4,7 @@ import os
 import time
 from pathlib import Path
 
-from .strategy import position_cost
+from .strategy import exit_prices, position_cost
 
 
 class Broker:
@@ -36,28 +36,36 @@ class Broker:
             return float(self.exchange.fetch_balance()["free"].get(self.cfg.quote, 0) or 0)
         return self.state["cash"]
 
-    def equity(self, prices: dict) -> float:
-        return self.cash() + sum(p["qty"] * prices.get(s, p["entry"]) for s, p in self.positions.items())
+    @staticmethod
+    def value(pos: dict, price: float) -> float:
+        """Vlera e një pozicioni: long = sasia × çmimi; short = marzhi + fitimi nga rënia e çmimit."""
+        return pos["qty"] * (price if pos.get("side", 1) > 0 else 2 * pos["entry"] - price)
 
-    def buy(self, symbol: str, price: float, equity: float, stop_pct: float = None):
-        """Blen sipas rrezikut të lejuar. Kthen pozicionin ose None nëse s'ka fonde.
+    def equity(self, prices: dict) -> float:
+        return self.cash() + sum(self.value(p, prices.get(s, p["entry"])) for s, p in self.positions.items())
+
+    def buy(self, symbol: str, price: float, equity: float, stop_pct: float = None, side: int = 1):
+        """Hap një pozicion sipas rrezikut të lejuar. Kthen pozicionin ose None nëse s'ka fonde.
 
         `stop_pct` është largësia e stop-loss nga hyrja në % (parazgjedhur stop_loss_pct).
+        `side`: 1 = blerje (long), −1 = shitje short (fitim kur çmimi bie).
         """
         cfg, fee = self.cfg, self.cfg.fee_pct / 100
         stop_pct = stop_pct or cfg.stop_loss_pct
         cost = min(position_cost(cfg, equity, stop_pct), self.cash())
         if cost <= 0 or symbol in self.positions:
             return None
+        server_stop = getattr(self.exchange, "stop_on_order", False)
         if self.live:
+            if side < 0 and not server_stop:
+                raise RuntimeError("Shitja short me urdhra realë punon vetëm në MT5 (tregu spot nuk e lejon)")
             qty = float(self.exchange.amount_to_precision(symbol, cost * (1 - fee) / price))
             limits = self.exchange.market(symbol).get("limits", {})
             if qty <= 0 or cost < (limits.get("cost", {}).get("min") or 0) or qty < (limits.get("amount", {}).get("min") or 0):
                 return None
             # Platformat që e mbështesin (MT5) e vendosin stop-in edhe në server.
-            params = ({"stopLossPrice": price * (1 - stop_pct / 100)}
-                      if getattr(self.exchange, "stop_on_order", False) else {})
-            order = self.exchange.create_order(symbol, "market", "buy", qty, None, params)
+            params = {"stopLossPrice": exit_prices(cfg, price, stop_pct, side)[0]} if server_stop else {}
+            order = self.exchange.create_order(symbol, "market", "buy" if side > 0 else "sell", qty, None, params)
             order = self._settled(order, symbol)
             qty = float(order.get("filled") or qty)
             price = float(order.get("average") or price)
@@ -69,25 +77,33 @@ class Broker:
         else:
             qty = cost * (1 - fee) / price
             self.state["cash"] -= cost
-        pos = {"qty": qty, "entry": price, "cost": cost, "high": price, "opened": time.time(),
-               "sl": price * (1 - stop_pct / 100),
-               "tp": price * (1 + cfg.take_profit_pct / 100) if cfg.take_profit_pct else None}
+        sl, tp = exit_prices(cfg, price, stop_pct, side)
+        pos = {"side": side, "qty": qty, "entry": price, "cost": cost, "high": price, "opened": time.time(),
+               "sl": sl, "tp": tp}
         self.positions[symbol] = pos
         self.save()
         return pos
 
     def sell(self, symbol: str, price: float, reason: str) -> dict:
+        """Mbyll pozicionin (long ose short) dhe kthen tregtinë e përfunduar."""
         pos, fee = self.positions[symbol], self.cfg.fee_pct / 100
+        side = pos.get("side", 1)
         if self.live:
             qty = float(self.exchange.amount_to_precision(symbol, pos["qty"]))
-            order = self._settled(self.exchange.create_order(symbol, "market", "sell", qty), symbol)
+            if getattr(self.exchange, "stop_on_order", False):   # MT5: mbyll pozicionet e robotit në këtë simbol
+                order = self.exchange.create_order(symbol, "market", "sell" if side > 0 else "buy", qty, None,
+                                                   {"reduceOnly": True})
+            else:
+                order = self.exchange.create_order(symbol, "market", "sell", qty)
+            order = self._settled(order, symbol)
             price = float(order.get("average") or price)
-            proceeds = float(order.get("cost") or qty * price) * (1 - fee)
+            qty = float(order.get("filled") or qty)
+            proceeds = max(self.value({**pos, "qty": qty}, price) - qty * price * fee, 0.0)
         else:
-            proceeds = pos["qty"] * price * (1 - fee)
+            proceeds = max(self.value(pos, price) - pos["qty"] * price * fee, 0.0)
             self.state["cash"] += proceeds
-        trade = {"symbol": symbol, "entry": pos["entry"], "exit": price, "reason": reason,
-                 "pnl": proceeds - pos["cost"], "pnl_pct": (proceeds / pos["cost"] - 1) * 100,
+        trade = {"symbol": symbol, "side": "long" if side > 0 else "short", "entry": pos["entry"], "exit": price,
+                 "reason": reason, "pnl": proceeds - pos["cost"], "pnl_pct": (proceeds / pos["cost"] - 1) * 100,
                  "closed": time.time()}
         del self.positions[symbol]
         self.state["trades"].append(trade)
@@ -107,12 +123,14 @@ class Broker:
     def check_exit(self, symbol: str, price: float):
         """Kthen arsyen e daljes ('stop-loss' / 'take-profit') ose None; përditëson trailing stop."""
         pos = self.positions[symbol]
-        if price <= pos["sl"]:
+        long = pos.get("side", 1) > 0
+        if (price <= pos["sl"]) if long else (price >= pos["sl"]):
             return "stop-loss"
-        if pos["tp"] and price >= pos["tp"]:
+        if pos["tp"] and ((price >= pos["tp"]) if long else (price <= pos["tp"])):
             return "take-profit"
-        if self.cfg.trailing_stop_pct and price > pos["high"]:
-            pos["high"] = price
-            pos["sl"] = max(pos["sl"], price * (1 - self.cfg.trailing_stop_pct / 100))
+        t = self.cfg.trailing_stop_pct / 100
+        if t and ((price > pos["high"]) if long else (price < pos["high"])):
+            pos["high"] = price   # çmimi më i mirë i arritur (maja për long, fundi për short)
+            pos["sl"] = max(pos["sl"], price * (1 - t)) if long else min(pos["sl"], price * (1 + t))
             self.save()
         return None

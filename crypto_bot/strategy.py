@@ -34,8 +34,8 @@ def score_frame(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
-def daily_trend(df: pd.DataFrame, cfg, daily=None) -> pd.Series:
-    """True aty ku mbyllja ditore është mbi EMA ditore. Përdoren vetëm ditë të mbyllura.
+def daily_trend(df: pd.DataFrame, cfg, daily=None, down: bool = False) -> pd.Series:
+    """True aty ku mbyllja ditore është mbi EMA ditore (ose nën të, me `down`). Vetëm ditë të mbyllura.
 
     `daily` janë qirinjtë ditorë; pa to, ditët nxirren nga vetë `df`.
     """
@@ -46,7 +46,8 @@ def daily_trend(df: pd.DataFrame, cfg, daily=None) -> pd.Series:
         daily = df[["close"]].resample("1D").last().dropna()
     d = daily["close"]
     n = cfg.daily_trend_ema
-    up = d > d.ewm(span=n, adjust=False, min_periods=n).mean()   # pa histori të mjaftueshme → False
+    avg = d.ewm(span=n, adjust=False, min_periods=n).mean()
+    up = (d < avg) if down else (d > avg)                         # pa histori të mjaftueshme → False
     up.index = up.index + pd.Timedelta(days=1)                    # dita njihet vetëm pasi mbyllet
     known = up.reindex(df.index + step, method="ffill")           # krahaso me çastin e mbylljes së qiririt
     return pd.Series(known.fillna(False).to_numpy(dtype=bool), index=df.index)
@@ -76,18 +77,34 @@ def signal_frame(df: pd.DataFrame, cfg, daily=None) -> pd.DataFrame:
     s["breakout_high"] = s["high"].rolling(cfg.breakout_entry).max().shift()
     s["breakout_low"] = s["low"].rolling(cfg.breakout_exit).min().shift()
     s["trend_ema"] = c.ewm(span=cfg.trend_ema, adjust=False, min_periods=cfg.trend_ema).mean()
+    # Pasqyra për shitjen short: thyerje e fundit për hyrje, thyerje e majës për dalje.
+    s["short_low"] = s["low"].rolling(cfg.breakout_entry).min().shift()
+    s["cover_high"] = s["high"].rolling(cfg.breakout_exit).max().shift()
+    s["daily_down"] = daily_trend(df, cfg, daily, down=True)
     if cfg.strategy == "breakout":
         s["buy"] = (c > s["breakout_high"]) & (c > s["trend_ema"]) & s["daily_up"]
         s["sell"] = c < s["breakout_low"]
+        s["short"] = (c < s["short_low"]) & (c < s["trend_ema"]) & s["daily_down"]
+        s["cover"] = c > s["cover_high"]
     else:
         s["buy"] = s["score"] >= cfg.buy_threshold
         s["sell"] = s["score"] <= cfg.sell_threshold
+        s["short"], s["cover"] = s["sell"], s["buy"]
+    if not cfg.allow_short:
+        s["short"] = False
     return s
 
 
 def warmup(cfg) -> int:
     """Qirinjtë e nevojshëm para sinjalit të parë të besueshëm."""
     return max(WARMUP, cfg.trend_ema, cfg.breakout_entry + 1, cfg.breakout_exit + 1)
+
+
+def exit_prices(cfg, price: float, stop_pct: float, side: int = 1):
+    """(stop-loss, take-profit) për një hyrje në `price`. side: 1 = blerje (long), −1 = shitje short."""
+    stop = price * (1 - side * stop_pct / 100)
+    take = price * (1 + side * cfg.take_profit_pct / 100) if cfg.take_profit_pct else None
+    return stop, take
 
 
 def analyze(df: pd.DataFrame, cfg, symbol: str = "", horizon: int = 12, daily=None) -> dict:
@@ -99,8 +116,12 @@ def analyze(df: pd.DataFrame, cfg, symbol: str = "", horizon: int = 12, daily=No
     last = s.iloc[-1]
     price, a = float(last["close"]), float(last["atr"])
     score = float(last["score"])
-    signal = "BLI" if last["buy"] else "SHIT" if last["sell"] else "PRIT"
-    if cfg.strategy == "breakout":
+    signal = "BLI" if last["buy"] else "SHORT" if last["short"] else "SHIT" if last["sell"] else "PRIT"
+    side = -1 if signal == "SHORT" else 1
+    if signal == "SHORT":
+        why = (f"çmimi theu fundin e {cfg.breakout_entry} qirinjve ({last['short_low']:.6g}) në trend rënës"
+               if cfg.strategy == "breakout" else f"pikët {score:+.0f} (shitje ≤ {cfg.sell_threshold:g})")
+    elif cfg.strategy == "breakout":
         up = price > last["trend_ema"]
         why = (f"çmimi theu majën e {cfg.breakout_entry} qirinjve ({last['breakout_high']:.6g}) në trend rritës"
                if signal == "BLI" else
@@ -139,7 +160,12 @@ def analyze(df: pd.DataFrame, cfg, symbol: str = "", horizon: int = 12, daily=No
         "signal_reason": why,
         "breakout_high": float(last["breakout_high"]),
         "buy_above": float(max(last["breakout_high"], last["trend_ema"])),   # mbyllja që do të jepte sinjal
+        "short_below": float(min(last["short_low"], last["trend_ema"])),     # mbyllja që do të jepte short
         "daily_up": bool(last["daily_up"]),
+        "daily_down": bool(last["daily_down"]),
+        "exit_long": bool(last["sell"]),      # pozicioni long duhet mbyllur
+        "exit_short": bool(last["cover"]),    # pozicioni short duhet mbyllur
+        "side": side,
         "breakout_low": float(last["breakout_low"]),
         "confidence": round(abs(score), 1),
         "direction": "RRITJE" if score > 15 else "RËNIE" if score < -15 else "ANASH",
@@ -158,11 +184,12 @@ def analyze(df: pd.DataFrame, cfg, symbol: str = "", horizon: int = 12, daily=No
         },
         "plan": {
             "entry": price,
-            "take_profit": price * (1 + cfg.take_profit_pct / 100) if cfg.take_profit_pct else None,
-            "stop_loss": price * (1 - stop_pct / 100),
+            "take_profit": exit_prices(cfg, price, stop_pct, side)[1],
+            "stop_loss": exit_prices(cfg, price, stop_pct, side)[0],
             "stop_pct": stop_pct,
             "position_pct": position_cost(cfg, 100.0, stop_pct),
-            "exit_level": float(last["breakout_low"]) if cfg.strategy == "breakout" else None,
+            "exit_level": (float(last["cover_high"] if side < 0 else last["breakout_low"])
+                           if cfg.strategy == "breakout" else None),
         },
     }
 
@@ -179,11 +206,11 @@ def format_report(a: dict, cfg) -> str:
         f"Mbështetja: {a['support']:.6g}   Rezistenca: {a['resistance']:.6g}",
         f"Parashikimi për {f['horizon_candles']} qirinjtë e ardhshëm: ~{f['expected']:.6g} "
         f"(brezi {f['low']:.6g} – {f['high']:.6g}, luhatshmëria {f['volatility_pct']:.2f}%/qiri)",
-        "Plani: hyrje {:.6g} | fitim {} | humbje −{:.3g}% → {:.6g}{}".format(
-            p["entry"],
-            f"+{cfg.take_profit_pct:g}% → {p['take_profit']:.6g}" if p["take_profit"] else "i hapur (pa kufi)",
+        "Plani{}: hyrje {:.6g} | fitim {} | humbje −{:.3g}% → {:.6g}{}".format(
+            " (short)" if a["side"] < 0 else "", p["entry"],
+            f"{cfg.take_profit_pct:g}% → {p['take_profit']:.6g}" if p["take_profit"] else "i hapur (pa kufi)",
             p["stop_pct"], p["stop_loss"],
-            f" | dalje nga trendi nën {p['exit_level']:.6g}" if p["exit_level"] else ""),
+            f" | dalje nga trendi {'mbi' if a['side'] < 0 else 'nën'} {p['exit_level']:.6g}" if p["exit_level"] else ""),
         f"Madhësia e blerjes: {p['position_pct']:.3g}% e kapitalit"
         + (f" (rrezik {cfg.risk_per_trade_pct:g}% e kapitalit nëse preket stop-i)" if cfg.risk_per_trade_pct else ""),
     ]

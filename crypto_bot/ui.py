@@ -58,7 +58,9 @@ def price_chart(s: pd.DataFrame, a: dict, cfg, bars: int = 150):
                       scale=alt.Scale(domain=["Qiri rritës", "Qiri rënës"], range=[c["up"], c["down"]]))
     x = alt.X("koha:T", title=None, axis=alt.Axis(format="%d %b", grid=False))
     levels = [("Blerje mbi", a["buy_above"]), ("Stop-loss", a["plan"]["stop_loss"])]
-    if a["plan"]["exit_level"]:
+    if cfg.allow_short:
+        levels.append(("Short nën", a["short_below"]))
+    elif a["plan"]["exit_level"]:
         levels.append(("Dalje nga trendi", a["plan"]["exit_level"]))
     if a["plan"]["take_profit"]:
         levels.append(("Fitimi", a["plan"]["take_profit"]))
@@ -97,9 +99,10 @@ def _positions_table(broker, exchange) -> pd.DataFrame:
             price = float(exchange.fetch_ticker(sym)["last"])
         except Exception:
             price = p["entry"]
-        rows.append({"Monedha": sym, "Hyrja": p["entry"], "Çmimi tani": price,
-                     "Fitim/humbje %": round((price / p["entry"] - 1) * 100, 2),
-                     "Vlera": round(p["qty"] * price, 2), "Stop-loss": p["sl"], "Fitimi": p["tp"]})
+        side = p.get("side", 1)
+        rows.append({"Monedha": sym, "Drejtimi": "long" if side > 0 else "short", "Hyrja": p["entry"],
+                     "Çmimi tani": price, "Fitim/humbje %": round((price / p["entry"] - 1) * 100 * side, 2),
+                     "Vlera": round(Broker.value(p, price), 2), "Stop-loss": p["sl"], "Fitimi": p["tp"]})
     return pd.DataFrame(rows)
 
 
@@ -111,7 +114,11 @@ def tab_chart(cfg, exchange, symbol):
     m[0].metric("Çmimi (qiriri i fundit i mbyllur)", f"{a['price']:,.6g}")
     m[1].metric("Sinjali", a["signal"])
     m[2].metric("Blerje mbi", f"{a['buy_above']:,.6g}", f"{gap:+.1f}% larg", delta_color="off")
-    m[3].metric("Trendi ditor", "rritës" if a["daily_up"] else "jo rritës")
+    if cfg.allow_short:
+        m[3].metric("Short nën", f"{a['short_below']:,.6g}",
+                    f"{(a['short_below'] / a['price'] - 1) * 100:+.1f}% larg", delta_color="off")
+    else:
+        m[3].metric("Trendi ditor", "rritës" if a["daily_up"] else "jo rritës")
     st.caption(f"Arsyeja: {a['signal_reason']}")
     st.altair_chart(price_chart(signal_frame(df, cfg, daily), a, cfg), width="stretch")
     st.caption(f"Vija e plotë është EMA{cfg.trend_ema}. Vijat me ndërprerje janë nivelet e planit, me çmimin përkrah.")
@@ -139,16 +146,16 @@ def tab_chart(cfg, exchange, symbol):
                 st.warning(f"{sym} u mbyll nga {reason}: {t['pnl']:+.2f} {cfg.quote} ({t['pnl_pct']:+.2f}%)")
         except Exception as e:
             st.caption(f"{sym}: çmimi nuk u mor ({e})")
-    c1, c2, c3 = st.columns([1, 1, 2])
-    if c1.button(f"Bli demo {symbol}", width="stretch", disabled=symbol in mb.positions):
-        price = float(exchange.fetch_ticker(symbol)["last"])
-        equity = mb.equity({symbol: price})
-        pos = mb.buy(symbol, price, equity, p["stop_pct"])
-        st.success(f"U ble {symbol} me {pos['cost']:.2f} {cfg.quote} në {price:,.6g}; stop {pos['sl']:,.6g}"
-                   if pos else "Nuk u ble: fonde të pamjaftueshme.")
-    if c2.button(f"Shit demo {symbol}", width="stretch", disabled=symbol not in mb.positions):
+    c1, c1b, c2, c3 = st.columns([1, 1, 1, 2])
+    for col, label, side in ((c1, "Bli (long)", 1), (c1b, "Shit short", -1)):
+        if col.button(f"{label} demo", width="stretch", disabled=symbol in mb.positions):
+            price = float(exchange.fetch_ticker(symbol)["last"])
+            pos = mb.buy(symbol, price, mb.equity({symbol: price}), p["stop_pct"], side)
+            st.success(f"U hap {'long' if side > 0 else 'short'} {symbol} me {pos['cost']:.2f} {cfg.quote} në "
+                       f"{price:,.6g}; stop {pos['sl']:,.6g}" if pos else "Nuk u hap: fonde të pamjaftueshme.")
+    if c2.button("Mbyll pozicionin", width="stretch", disabled=symbol not in mb.positions):
         t = mb.sell(symbol, float(exchange.fetch_ticker(symbol)["last"]), "me dorë")
-        st.success(f"U shit: {t['pnl']:+.2f} {cfg.quote} ({t['pnl_pct']:+.2f}%)")
+        st.success(f"U mbyll: {t['pnl']:+.2f} {cfg.quote} ({t['pnl_pct']:+.2f}%)")
     done = mb.state["trades"]
     c3.metric("Para demo të lira", f"{mb.cash():,.2f} {cfg.quote}",
               f"{sum(t['pnl'] for t in done):+.2f} nga {len(done)} tregti të mbyllura", delta_color="off")
@@ -164,12 +171,15 @@ def tab_scan(cfg, exchange):
     rows = st.session_state.get("scan")
     if not rows:
         return st.info("Shtyp butonin për të skanuar monedhat më të tregtuara të platformës.")
-    order = {"BLI": 0, "PRIT": 1, "SHIT": 2}
+    order = {"BLI": 0, "SHORT": 1, "PRIT": 2, "SHIT": 3}
     rows = sorted(rows, key=lambda r: (order[r["signal"]], r["buy_above"] / r["price"]))
     m = st.columns(3)
     m[0].metric("Monedha të skanuara", len(rows))
     m[1].metric("Sinjale blerjeje", sum(r["signal"] == "BLI" for r in rows))
-    m[2].metric("Me trend ditor rritës", sum(r["daily_up"] for r in rows))
+    if cfg.allow_short:
+        m[2].metric("Sinjale short", sum(r["signal"] == "SHORT" for r in rows))
+    else:
+        m[2].metric("Me trend ditor rritës", sum(r["daily_up"] for r in rows))
     st.dataframe(pd.DataFrame([{
         "Monedha": r["symbol"], "Çmimi": r["price"], "Sinjali": r["signal"], "Blerje mbi": r["buy_above"],
         "Larg %": round((r["buy_above"] / r["price"] - 1) * 100, 1),
@@ -186,7 +196,8 @@ def tab_robot(cfg, exchange):
     c1, c2, c3 = st.columns([1, 1, 2])
     whole = c3.checkbox("Skano gjithë tregun (jo vetëm monedhën e zgjedhur)", True, disabled=running)
     if c1.button("▶ Nis robotin", disabled=running, width="stretch"):
-        cmd = [sys.executable, "-m", "crypto_bot", "nis", "--exchange", cfg.exchange] + (["--gjithe-tregun"] if whole else [])
+        cmd = ([sys.executable, "-m", "crypto_bot", "nis", "--exchange", cfg.exchange]
+               + (["--gjithe-tregun"] if whole else ["--symbol", cfg.symbols[0]]) + (["--short"] if cfg.allow_short else []))
         flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
         with open("crypto_bot_output.log", "a", encoding="utf-8") as out:
             subprocess.Popen(cmd, stdout=out, stderr=subprocess.STDOUT, creationflags=flags)
@@ -218,7 +229,7 @@ def tab_robot(cfg, exchange):
         st.subheader("Tregtitë e mbyllura")
         t = pd.DataFrame(trades).iloc[::-1]
         t["closed"] = pd.to_datetime(t["closed"], unit="s").dt.strftime("%d %b %H:%M")
-        st.dataframe(t.rename(columns={"symbol": "Monedha", "entry": "Hyrja", "exit": "Dalja", "reason": "Arsyeja",
+        st.dataframe(t.rename(columns={"symbol": "Monedha", "side": "Drejtimi", "entry": "Hyrja", "exit": "Dalja", "reason": "Arsyeja",
                                        "pnl": "Fitim/humbje", "pnl_pct": "%", "closed": "Mbyllur"}),
                      width="stretch", hide_index=True)
     log = Path(cfg.log_file)
@@ -229,7 +240,7 @@ def tab_robot(cfg, exchange):
         d["time"] = d["time"].str.slice(0, 16).str.replace("T", " ")
         only = st.checkbox("Vetëm blerjet dhe shitjet", False)
         if only:
-            d = d[d["action"].isin(["BLI", "SHIT"])]
+            d = d[d["action"].isin(["BLI", "SHORT", "SHIT"])]
         cols = {"time": "Koha (UTC)", "symbol": "Monedha", "action": "Vendimi", "reason": "Arsyeja", "price": "Çmimi"}
         st.dataframe(d[[c for c in cols if c in d]].rename(columns=cols).head(60), width="stretch", hide_index=True)
 
@@ -298,7 +309,7 @@ def tab_backtest(cfg, exchange, symbol):
         t = pd.DataFrame(r["trade_list"]).iloc[::-1]
         for col in ("entry_time", "exit_time"):
             t[col] = t[col].str.slice(0, 16)
-        st.dataframe(t.rename(columns={"entry_time": "Hyrja (koha)", "exit_time": "Dalja (koha)", "entry": "Çmimi i hyrjes",
+        st.dataframe(t.rename(columns={"entry_time": "Hyrja (koha)", "exit_time": "Dalja (koha)", "side": "Drejtimi", "entry": "Çmimi i hyrjes",
                                        "exit": "Çmimi i daljes", "reason": "Arsyeja", "pnl": "Fitim/humbje", "pnl_pct": "%"}),
                      width="stretch", hide_index=True)
 
@@ -308,14 +319,16 @@ def render():
     st.caption("Analizë, pika hyrjeje dhe tregtim me para demo. Nuk është këshillë financiare; "
                "nivelet janë rregulla të strategjisë, jo garanci.")
     base = load_config()
-    c = st.columns(4)
+    c = st.columns([2, 2, 1, 1, 2])
     name = c[0].selectbox("Platforma", PLATFORMS, index=PLATFORMS.index(base.exchange) if base.exchange in PLATFORMS else 0)
     symbol = c[1].text_input("Monedha", base.symbols[0]).strip().upper()
     timeframe = c[2].selectbox("Intervali", TIMEFRAMES,
                                index=TIMEFRAMES.index(base.timeframe) if base.timeframe in TIMEFRAMES else 2)
     stop = c[3].number_input("Stop-loss %", 0.5, 50.0, float(base.stop_loss_pct), 0.5)
+    short = c[4].checkbox("Lejo edhe shitje short", base.allow_short,
+                          help="Roboti hap pozicione edhe kur pret rënie. Në prova kjo e ka dobësuar rezultatin.")
     try:
-        cfg = load_config(exchange=name, symbols=[symbol], timeframe=timeframe, stop_loss_pct=stop)
+        cfg = load_config(exchange=name, symbols=[symbol], timeframe=timeframe, stop_loss_pct=stop, allow_short=short)
         exchange = _exchange(name, False)
         if hasattr(exchange, "account_currency"):   # MT5: monedha bazë është ajo e llogarisë
             cfg.quote = exchange.account_currency()

@@ -21,6 +21,7 @@ class Config:
     breakout_exit: int = 20            # shit kur çmimi mbyllet nën fundin e kaq qirinjve të fundit
     trend_ema: int = 200               # bli vetëm kur çmimi është mbi këtë mesatare (trend rritës)
     daily_trend_ema: int = 50          # bli vetëm kur çmimi ditor është mbi EMA ditore (0 = i fikur)
+    allow_short: bool = False          # lejo edhe shitje short (fitim kur çmimi bie); vetëm MT5 ose simulim
     take_profit_pct: float = 0.0       # shit me fitim kur çmimi rritet kaq % (0 = i fikur, lër fitimin të rritet)
     stop_loss_pct: float = 8.0         # shit me humbje kur çmimi bie kaq %
     stop_loss_atr: float = 0.0         # nëse > 0: stop = hyrja − kaq × ATR (zëvendëson stop_loss_pct)

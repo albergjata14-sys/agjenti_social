@@ -397,10 +397,10 @@ class FakeMT5:
 
     def order_send(self, req):
         self.requests.append(req)
-        if req["type"] == self.ORDER_TYPE_BUY:
-            self.open.append(self.NS(ticket=7, volume=req["volume"], magic=req["magic"]))
-        else:
+        if "position" in req:   # mbyllje e një pozicioni ekzistues
             self.open = [p for p in self.open if p.ticket != req["position"]]
+        else:
+            self.open.append(self.NS(ticket=7, volume=req["volume"], magic=req["magic"], type=req["type"]))
         return self.NS(retcode=self.TRADE_RETCODE_DONE, price=req["price"], volume=req["volume"], order=1, comment="")
 
 
@@ -500,3 +500,79 @@ def test_cli_commands(tmp_path, monkeypatch, capsys):
     assert "U shtua: mexc-ai parashikon rënie" in capsys.readouterr().out
     with pytest.raises(ValueError):
         cli.main(["ditar", "shto", *base])
+
+
+def test_short_selling(tmp_path):
+    down = candles(breakout_series()[::-1] * 1.0)     # pasqyra: rënie → plato → thyerje poshtë → ngritje
+    off, on = Config(daily_trend_ema=0, fee_pct=0), Config(daily_trend_ema=0, fee_pct=0, allow_short=True)
+    # I fikur si parazgjedhje: asnjë sinjal short.
+    assert not signal_frame(down, off)["short"].any()
+    s = signal_frame(down, on)
+    assert s["short"].any() and s["cover"].any() and not s["buy"].any()
+    i = 210 + int(np.argmax(s["short"].to_numpy()[210:]))   # sinjali i parë pas periudhës së ngrohjes
+    assert s["short"].iloc[i]
+    a = analyze(down.iloc[: i + 1], on, "X")
+    assert a["signal"] == "SHORT" and a["side"] == -1 and "theu fundin" in a["signal_reason"]
+    assert a["plan"]["stop_loss"] == pytest.approx(a["price"] * 1.08)      # stop-i i short-it është sipër
+
+    r = backtest(down, on)
+    shorts = [t for t in r["trade_list"] if t["side"] == "short"]
+    assert shorts and shorts[0]["exit"] < shorts[0]["entry"] and shorts[0]["pnl"] > 0
+    assert backtest(down, off)["trades"] == 0
+
+    # Llogaritja në simulim: short 125 USDT në 100 → çmimi 90 jep +10%, çmimi 108 prek stop-in.
+    b = Broker(Config(state_file=str(tmp_path / "s.json"), fee_pct=0))
+    pos = b.buy("X/USDT", 100.0, 1000.0, side=-1)
+    assert pos["side"] == -1 and pos["sl"] == pytest.approx(108) and b.cash() == pytest.approx(875)
+    assert b.equity({"X/USDT": 90.0}) == pytest.approx(1012.5)
+    assert b.check_exit("X/USDT", 95.0) is None and b.check_exit("X/USDT", 108.5) == "stop-loss"
+    t = b.sell("X/USDT", 90.0, "sinjal")
+    assert t["side"] == "short" and t["pnl"] == pytest.approx(12.5) and b.cash() == pytest.approx(1012.5)
+    b.buy("X/USDT", 100.0, 1000.0, side=-1)
+    assert b.sell("X/USDT", 108.0, "stop-loss")["pnl"] == pytest.approx(-10)   # humbja = 1% e kapitalit
+    # Trailing për short: stop-i zbret pas çmimit.
+    b2 = Broker(Config(state_file=str(tmp_path / "t.json"), trailing_stop_pct=3, stop_loss_pct=5, risk_per_trade_pct=0))
+    b2.buy("X/USDT", 100.0, 1000.0, side=-1)
+    assert b2.check_exit("X/USDT", 80.0) is None and b2.positions["X/USDT"]["sl"] == pytest.approx(82.4)
+    assert b2.check_exit("X/USDT", 83.0) == "stop-loss"
+
+    # Në platformë spot reale short-i refuzohet.
+    with pytest.raises(RuntimeError):
+        Broker(Config(state_file=str(tmp_path / "live.json")), FakeLive()).buy("BTC/USDT", 100.0, 500.0, side=-1)
+
+
+def test_bot_opens_and_closes_short(tmp_path):
+    closes = breakout_series()[::-1]
+    cfg = Config(symbols=["BTC/USDT"], candles=300, state_file=str(tmp_path / "s.json"), allow_short=True,
+                 log_file=str(tmp_path / "d.jsonl"), daily_trend_ema=0, max_daily_loss_pct=0)
+    s = signal_frame(candles(closes), cfg)
+    i = 210 + int(np.argmax(s["short"].to_numpy()[210:]))
+    j = i + int(np.argmax(s["cover"].to_numpy()[i:]))
+    assert s["short"].iloc[i] and s["cover"].iloc[j] and j > i
+    ex = make_fake({"BTC/USDT": closes[: i + 2]})       # qiriri i fundit i mbyllur është ai i sinjalit short
+    broker = Broker(cfg)
+    assert [(a[0], a[1]) for a in run_cycle(ex, broker, cfg)] == [("SHORT", "BTC/USDT")]
+    assert broker.positions["BTC/USDT"]["side"] == -1
+    ex2 = make_fake({"BTC/USDT": closes[: j + 2]})      # më vonë: çmimi kthehet lart → mbyllje me sinjal
+    ex2.last["BTC/USDT"] = float(closes[j])
+    acts = run_cycle(ex2, broker, cfg)
+    assert [a[0] for a in acts] == ["SHIT"] and acts[0][2]["side"] == "short" and not broker.positions
+    assert [e["action"] for e in read_log(cfg) if e["action"] in ("SHORT", "SHIT")] == ["SHORT", "SHIT"]
+
+
+def test_mt5_short(tmp_path):
+    from crypto_bot.mt5 import MT5Exchange
+
+    fake = FakeMT5(candles(trend(400, 100, 0.002)))
+    ex = MT5Exchange(fake)
+    b = Broker(Config(exchange="mt5", quote="USD", state_file=str(tmp_path / "m.json"), fee_pct=0), ex)
+    pos = b.buy("BTCUSD", 100.0, 1000.0, side=-1)
+    opened = fake.requests[0]
+    assert opened["type"] == fake.ORDER_TYPE_SELL and opened["price"] == 99.95       # short hapet në bid
+    assert opened["sl"] == pytest.approx(108.0) and "position" not in opened         # stop-i sipër, në server
+    assert pos["side"] == -1 and pos["entry"] == 99.95
+    fake.ask = 90.0
+    t = b.sell("BTCUSD", 90.0, "sinjal")
+    closed = fake.requests[1]
+    assert closed["type"] == fake.ORDER_TYPE_BUY and closed["position"] == 7 and closed["price"] == 90.0
+    assert t["pnl"] == pytest.approx(1.25 * (99.95 - 90.0)) and not fake.open

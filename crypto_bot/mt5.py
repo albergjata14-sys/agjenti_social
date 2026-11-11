@@ -1,7 +1,7 @@
 """Lidhja me MetaTrader 5 (p.sh. BTCUSD, XAUUSD) me të njëjtën ndërfaqe si platformat e ccxt.
 
 Kërkon Windows me terminalin MT5 të hapur dhe të kyçur në llogari (reale ose demo) dhe
-`pip install MetaTrader5`. Roboti blen vetëm long dhe pa levë: vlera e pozicionit nuk e kalon
+`pip install MetaTrader5`. Roboti tregton pa levë (long, dhe short kur lejohet): vlera e pozicionit nuk e kalon
 marzhin e lirë. Stop-loss vendoset edhe në serverin e brokerit.
 """
 import math
@@ -118,33 +118,39 @@ class MT5Exchange:
         return m.ORDER_FILLING_RETURN
 
     def create_order(self, symbol, type_, side, amount, price=None, params=None) -> dict:
-        m, info = self.mt5, self._info(symbol)
+        """Urdhër market. Me params["reduceOnly"] mbyll pozicionet e robotit në simbol; përndryshe hap
+        një pozicion të ri: side "buy" = long, "sell" = short. params["stopLossPrice"] vendos stop në server."""
+        m, info, params = self.mt5, self._info(symbol), params or {}
         if type_ != "market":
             raise ValueError("Në MT5 roboti përdor vetëm urdhra market")
         tick = m.symbol_info_tick(symbol)
         request = {"action": m.TRADE_ACTION_DEAL, "symbol": symbol, "deviation": 20, "magic": MAGIC,
                    "comment": "crypto_bot", "type_time": m.ORDER_TIME_GTC, "type_filling": self._filling(info)}
-        if side == "buy":
-            lots = self._lots(symbol, amount)
-            if lots <= 0:
-                raise ValueError(f"Sasia për {symbol} është nën minimumin e brokerit")
-            request.update(type=m.ORDER_TYPE_BUY, volume=lots, price=tick.ask)
-            stop = (params or {}).get("stopLossPrice")
-            if stop:
-                request["sl"] = round(stop, info.digits)
-        else:
+        size = info.trade_contract_size
+        if params.get("reduceOnly"):
             mine = [p for p in (m.positions_get(symbol=symbol) or []) if p.magic == MAGIC]
             if not mine:  # pozicionin e ka mbyllur tashmë stop-i në server
-                return {"id": None, "filled": amount, "average": tick.bid, "cost": amount * tick.bid}
-            lots = round(sum(p.volume for p in mine), 8)
-            results = [self._send({**request, "type": m.ORDER_TYPE_SELL, "volume": p.volume, "price": tick.bid,
-                                   "position": p.ticket}) for p in mine]
-            avg = sum(r.price * r.volume for r in results) / sum(r.volume for r in results)
-            units = lots * info.trade_contract_size
-            return {"id": results[-1].order, "filled": units, "average": avg, "cost": units * avg}
+                px = tick.bid if side == "sell" else tick.ask
+                return {"id": None, "filled": amount, "average": px, "cost": amount * px}
+            results = []
+            for p in mine:  # një long mbyllet me shitje në bid, një short me blerje në ask
+                is_long = p.type == m.ORDER_TYPE_BUY
+                results.append(self._send({**request, "type": m.ORDER_TYPE_SELL if is_long else m.ORDER_TYPE_BUY,
+                                           "volume": p.volume, "price": tick.bid if is_long else tick.ask,
+                                           "position": p.ticket}))
+            lots = sum(r.volume for r in results)
+            avg = sum(r.price * r.volume for r in results) / lots
+            return {"id": results[-1].order, "filled": lots * size, "average": avg, "cost": lots * size * avg}
+        lots = self._lots(symbol, amount)
+        if lots <= 0:
+            raise ValueError(f"Sasia për {symbol} është nën minimumin e brokerit")
+        buy = side == "buy"
+        request.update(type=m.ORDER_TYPE_BUY if buy else m.ORDER_TYPE_SELL, volume=lots,
+                       price=tick.ask if buy else tick.bid)
+        if params.get("stopLossPrice"):
+            request["sl"] = round(params["stopLossPrice"], info.digits)
         r = self._send(request)
-        units = r.volume * info.trade_contract_size
-        return {"id": r.order, "filled": units, "average": r.price, "cost": units * r.price}
+        return {"id": r.order, "filled": r.volume * size, "average": r.price, "cost": r.volume * size * r.price}
 
     def _send(self, request):
         r = self.mt5.order_send(request)

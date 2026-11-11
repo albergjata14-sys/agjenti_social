@@ -52,6 +52,7 @@ E njëjta analizë, skanim dhe backtest gjenden edhe te paneli **Crypto Trading 
 | `strategy` | `breakout` (parazgjedhur) ose `score` – shih më poshtë |
 | `breakout_entry` / `breakout_exit` / `trend_ema` | bli mbi majën e 55 qirinjve, shit nën fundin e 20 qirinjve, vetëm mbi EMA200 |
 | `daily_trend_ema` | bli vetëm kur çmimi ditor është mbi EMA50 ditore (0 = i fikur) |
+| `allow_short` | lejo edhe shitje short (fitim kur çmimi bie); vetëm në MT5 ose në simulim (parazgjedhur `false`) |
 | `take_profit_pct` | shit me fitim kur çmimi rritet kaq % (0 = i fikur: fitimi lihet të rritet) |
 | `stop_loss_pct` | shit me humbje kur çmimi bie kaq % nën çmimin e blerjes |
 | `stop_loss_atr` | nëse > 0, stop-i vendoset kaq × ATR nën hyrjen (sipas luhatshmërisë), në vend të përqindjes |
@@ -81,7 +82,12 @@ volumi 10%); blen mbi `buy_threshold`, shet nën `sell_threshold`. Pikët shfaqe
 informacion, edhe kur strategjia është `breakout`.
 
 Raporti jep edhe mbështetjen/rezistencën, brezin e pritshëm të çmimit (sipas luhatshmërisë ATR) dhe
-planin hyrje / fitim / stop. Roboti tregton vetëm spot (blen dhe shet, pa levë dhe pa short).
+planin hyrje / fitim / stop. Roboti tregton pa levë.
+
+**Shitja short** (`--short` ose `"allow_short": true`) është pasqyra e blerjes: hap short kur çmimi
+mbyllet nën fundin e 55 qirinjve, nën EMA200 dhe me trend ditor rënës; e mbyll kur çmimi mbyllet mbi
+majën e 20 qirinjve ose kur preket stop-loss (që është sipër hyrjes). Punon në simulim në çdo platformë
+dhe me urdhra në MT5; tregu spot i MEXC, Binance dhe Bybit nuk e lejon me urdhra realë.
 
 ### Çfarë treguan provat (MEXC, nëntor 2026)
 
@@ -101,6 +107,10 @@ komision 0.1%:
 - Në qirinj 1-orësh rezultati ishte rreth zeros, prandaj parazgjedhja është `4h`.
 - Rezultati i së kaluarës nuk garanton të ardhmen. Zgjedhjet u bënë mbi të njëjtat të dhëna, ndaj
   prit rezultat më të dobët në të ardhmen.
+
+Shitja short në të njëjtat të dhëna (100% në një monedhë): vetëm short −29%, blerje + short +22%
+kundrejt +71% vetëm me blerje, dhe rënia maksimale u rrit nga 19% në 30%. Short-i fitoi vetëm në
+periudhën më të fortë të rënies. Prandaj është i fikur si parazgjedhje.
 
 Ide të provuara që **nuk** u futën, sepse e dobësuan rezultatin: mbyllja e pjesshme e fitimit
 (50% në TP1 + stop në çmimin e hyrjes; 40/40/20) e uli totalin nga rreth +61% në +17–25%; filtri i
@@ -123,12 +133,13 @@ Simulimi i robotit (`python -m crypto_bot nis --exchange ...`) punon njësoj në
 para virtuale, pa çelësa.
 
 **MetaTrader 5** kërkon Windows me terminalin MT5 të hapur dhe të kyçur, plus `pip install MetaTrader5`.
-Vendos `"exchange": "mt5"`, `"quote": "USD"` dhe simbolet me emrat e brokerit. Roboti blen vetëm long dhe
+Vendos `"exchange": "mt5"` dhe simbolet me emrat e brokerit (monedha merret nga llogaria). Roboti tregton
 pa levë (vlera e pozicionit nuk e kalon marzhin e lirë), dhe stop-loss vendoset edhe në serverin e
-brokerit. Për skanim përdoren simbolet e Market Watch.
+brokerit. Në MT5 duhet ndezur butoni Algo Trading. Shembull me urdhra në llogarinë demo:
+`python -m crypto_bot nis --live --exchange mt5 --symbol XAUUSD,BTCUSD --short`. Për skanim përdoren simbolet e Market Watch.
 
-Gjendja e verifikimit: MEXC u provua me të dhëna reale. Binance, Bybit dhe MT5 u provuan vetëm me
-teste të simuluara; urdhrat realë nuk janë provuar në asnjë platformë. Provoji së pari në simulim,
+Gjendja e verifikimit: MEXC dhe MT5 u provuan me të dhëna reale (analizë dhe backtest). Binance dhe
+Bybit u provuan vetëm me teste të simuluara; dërgimi i urdhrave nuk është provuar ende në asnjë platformë. Provoji së pari në simulim,
 pastaj në testnet / llogari demo.
 
 ### Ditari i parashikimeve
