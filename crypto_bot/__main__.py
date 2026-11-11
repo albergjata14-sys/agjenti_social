@@ -46,7 +46,7 @@ def main(argv=None):
                     f"urdhra në llogarinë MT5 {exchange.account_label()}" if hasattr(exchange, "account_label") else
                     "urdhra me PARA REALE")
             if input(f"KUJDES: roboti do të dërgojë {what} në {cfg.exchange}. "
-                     "Shkruaj 'PO' për të vazhduar: ").strip() != "PO":
+                     "Shkruaj 'PO' për të vazhduar: ").strip().upper() != "PO":
                 return print("U anulua.")
             tag = f"_{cfg.exchange}_testnet" if cfg.testnet else f"_{cfg.exchange}_live"
             cfg.state_file = cfg.state_file.replace(".json", tag + ".json")
