@@ -79,7 +79,9 @@ python -m crypto_bot portofol --candles 5000      # si do të kishte dalë robot
 python -m crypto_bot nis                          # roboti punon vetë, në SIMULIM (para virtuale)
 python -m crypto_bot nis --gjithe-tregun          # njësoj, por zgjedh nga gjithë tregu
 python -m crypto_bot analist                       # analisti: provon 6 strategji dhe miraton ato që fitojnë
-python -m crypto_bot nis --ekip                    # analisti + tregtari + turneu (simulim)
+python -m crypto_bot nis --ekip                    # analisti + tregtari + turneu + laboratori (simulim)
+python -m crypto_bot laboratori                    # krijo dhe provo strategji të reja tani
+python -m crypto_bot raport                        # raporti i djeshëm dhe i sotëm nga kujtesa
 python -m crypto_bot nis --aktiv                   # mënyra aktive: lart ose poshtë, gjithë tregu, me këmbim
 python -m crypto_bot portofol --aktiv --candles 5000   # prova e mënyrës aktive në të kaluarën
 python -m crypto_bot nis --live                   # PARA REALE (kërkon konfirmim dhe çelësa API)
@@ -152,6 +154,21 @@ Pse miratim dhe jo vetëm "më e mira": në një provë jashtë mostrës (20 mon
 ditë), kalimi te strategjia që kishte fituar më shumë së fundmi dha +2.6%; luajtja e të gjitha të
 miratuarave njëherësh dha +12.7%; të gjitha pa filtër +6.6%. Strategjitë e mira të mbajtura fikse dhanë
 +13% deri +17%, por kjo dihet vetëm pas faktit. Ekipi punon vetëm në simulim.
+
+### Kujtesa, laboratori dhe puna 24/7
+
+- **Kujtesa** (`crypto_bot_memory.db`, SQLite): çdo vendim me arsyen, çdo tregti e mbyllur, kapitali i çdo
+  strategjie në çdo cikël dhe çmimet e 30 monedhave çdo orë. Në mesnatë (UTC) shkruhet **raporti i ditës**
+  dhe dërgohet si njoftim. `python -m crypto_bot raport` e shfaq; paneli e tregon te "📔 Kujtesa".
+- **Laboratori** (`python -m crypto_bot laboratori`, ose vetë çdo `lab_hours` = 24 orë kur punon ekipi)
+  krijon 24 strategji të reja duke ndryshuar 1–2 parametra të strategjive të mira ose rastësisht
+  (momentum dhe thyerje maje, 1h dhe 4h, lart dhe poshtë, stop 4–12%, me ose pa objektiv fitimi), i provon si
+  analisti dhe i çon deri në `max_evolved` (6) më të mirat në **turne**. Pas `promote_days` (14) ditësh fitimi
+  në turne me të paktën 15 tregti hyjnë në **ekip**; nëse humbin qartë, hidhen poshtë. Laboratori provon
+  shumë variante dhe disa duken mirë rastësisht, ndaj vetëm turneu në kohë reale vendos.
+- **24/7 në Windows:** dopio-klik te `start_ekipi.bat`. Nis ekipin dhe e rinis vetë pas 30 sekondash nëse
+  ndalet nga një gabim (p.sh. pa internet). Kompjuteri duhet të mos flejë: Settings → System → Power →
+  Sleep: Never kur është në prizë.
 
 ### Mënyra aktive (`--aktiv`, strategjia `momentum`)
 

@@ -71,6 +71,11 @@ class Config:
     follow_analyst: bool = False       # tregtari përdor strategjinë që rekomandon analisti
     analyst_hours: float = 12.0        # sa shpesh e rifreskon tregtari rekomandimin kur e ndjek analistin
     tournament: bool = False           # prova paralele me para demo e të gjitha strategjive kandidate
+    memory_file: str = "crypto_bot_memory.db"   # kujtesa: çdo vendim, tregti, kapital dhe raport ditor ("" = pa)
+    lab_hours: float = 24.0            # sa shpesh laboratori krijon dhe provon strategji të reja (0 = i fikur)
+    lab_candidates: int = 24           # sa strategji të reja provon laboratori çdo herë
+    max_evolved: int = 6               # sa strategji të laboratorit mund të jenë njëkohësisht në turne
+    promote_days: float = 14.0         # sa ditë fitimi në turne duhen që një strategji e re të hyjë në ekip
     label: str = ""                    # emri i strategjisë në njoftime dhe regjistër (ekipi / turneu)
     pause_entries: bool = False        # mos hap pozicione të reja (p.sh. kur analisti rekomandon pushim)
     # --- njoftimet (shih crypto_bot/notify.py) ---

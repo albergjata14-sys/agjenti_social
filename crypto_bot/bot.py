@@ -4,7 +4,7 @@ import time
 from pathlib import Path
 from datetime import datetime, timezone
 
-from . import notify
+from . import memory, notify
 from .data import fetch_candles, fetch_daily, spread_pct, top_symbols
 from .strategy import analyze
 
@@ -50,6 +50,12 @@ def scan(exchange, cfg, symbols=None) -> list:
 def record(cfg, **entry):
     """Shton një rresht te regjistri i vendimeve (JSON Lines)."""
     if cfg.log_file:
+        if cfg.memory_file:
+            try:
+                memory.log_event(cfg, "vendim", entry.get("symbol", ""), entry.get("action", ""), entry.get("price"),
+                                 {k: v for k, v in entry.items() if k not in ("symbol", "action", "price")})
+            except Exception:
+                pass
         entry = {"time": datetime.now(timezone.utc).isoformat(timespec="seconds"), **entry}
         if cfg.label:
             entry["strategy"] = cfg.label
@@ -108,6 +114,11 @@ def _rotate(broker, cfg, a, by_symbol, prices, actions) -> bool:
 def _sell(broker, cfg, sym, price, reason, actions, score=None):
     t = broker.sell(sym, price, reason)
     actions.append(("SHIT", sym, t))
+    if cfg.memory_file:
+        try:
+            memory.log_trade(cfg, sym, t)
+        except Exception:
+            pass
     record(cfg, symbol=sym, action="SHIT", reason=reason, price=t["exit"], score=score,
            pnl=round(t["pnl"], 4), pnl_pct=round(t["pnl_pct"], 2))
     log(f"MBYLL {t['side']} {sym} @ {t['exit']:.6g} ({reason}) → {t['pnl']:+.2f} {cfg.quote} ({t['pnl_pct']:+.2f}%)")
@@ -265,18 +276,22 @@ class CycleCache:
         return cached
 
 
+_last_market = [0.0]
+
+
 def run_team_cycle(exchange, base_cfg, rec, tournament: bool = True) -> dict:
     """Një cikël i ekipit: çdo strategji tregton me pjesën e saj të kapitalit (vetëm të miratuarat hapin
     pozicione të reja), dhe turneu i provon të gjitha me gjithë kapitalin demo. Kthen gjendjen e përbashkët."""
-    from .analyst import CANDIDATES, team_config, tournament_config
+    from .analyst import team_candidates, team_config, tournament_candidates, tournament_config
     from .broker import Broker
 
     cache = CycleCache(exchange)
     approved = set((rec or {}).get("approved", []))
     team = {"team": True, "live": False, "heartbeat": time.time(), "cash": 0.0, "positions": {}, "trades": [],
             "members": [], "approved": sorted(approved), "recommendation": (rec or {}).get("name")}
-    for cand in CANDIDATES:
-        cfg = team_config(base_cfg, cand, approved)
+    members = team_candidates(base_cfg)
+    for cand in members:
+        cfg = team_config(base_cfg, cand, approved, len(members))
         broker = Broker(cfg)
         try:
             run_cycle(cache, broker, cfg)
@@ -294,13 +309,28 @@ def run_team_cycle(exchange, base_cfg, rec, tournament: bool = True) -> dict:
                                 "trades": len(st["trades"])})
     team["trades"].sort(key=lambda t: t.get("closed", 0))
     team["last_equity"] = sum(m["equity"] for m in team["members"])
+    snapshot = [(m["name"], m["equity"], m["open"]) for m in team["members"]] + [("Ekipi", team["last_equity"],
+                                                                                    len(team["positions"]))]
     if tournament:
-        for cand in CANDIDATES:
+        for cand in tournament_candidates(base_cfg):
             cfg = tournament_config(base_cfg, cand)
             try:
-                run_cycle(cache, Broker(cfg), cfg)
+                b = Broker(cfg)
+                run_cycle(cache, b, cfg)
+                snapshot.append((cfg.label, b.state.get("last_equity", b.state["cash"]), len(b.state["positions"])))
             except Exception as e:
                 log(f"[turne {cand['name']}] gabim: {e}")
+    # Kujtesa: kapitali i çdo strategjie në çdo cikël dhe çmimet e tregut një herë në orë.
+    if base_cfg.memory_file:
+        try:
+            memory.log_equity(base_cfg, snapshot)
+            if time.time() - _last_market[0] > 3600:
+                tick = cache.fetch_tickers()
+                memory.log_market(base_cfg, [(s, t.get("last"), t.get("percentage")) for s, t in tick.items()
+                                             if s in set(top_symbols(cache, base_cfg.quote, 30)) and t.get("last")])
+                _last_market[0] = time.time()
+        except Exception as e:
+            log(f"Kujtesa nuk u shkrua (roboti vazhdon): {e}")
     Path(base_cfg.state_file).write_text(json.dumps(team, indent=2))
     return team
 
@@ -314,8 +344,28 @@ def run_team_forever(exchange, base_cfg, tournament: bool = True):
     log("Ekipi u nis (SIMULIM): analisti miraton strategjitë, tregtari i luan njëkohësisht"
         + (", turneu i provon të gjitha." if tournament else ".") + " Ctrl+C për ta ndalur.")
     last_members = None
+    from datetime import datetime as _dt
+
+    from .analyst import forward_results
+    from .lab import review_tournament
+
+    today = _dt.now(timezone.utc).strftime("%Y-%m-%d")
     try:
         while not stop.exists():
+            # Raporti i ditës: kur ndërron dita (UTC), përmblidhet dita e kaluar dhe dërgohet si njoftim.
+            now_day = _dt.now(timezone.utc).strftime("%Y-%m-%d")
+            if now_day != today and base_cfg.memory_file:
+                try:
+                    text = memory.save_report(base_cfg, memory.daily_report(base_cfg, today))
+                    notify.emit(base_cfg, "raport", "", text)
+                    log(text.replace("\n", " | "))
+                    for name, status in review_tournament(base_cfg, forward_results(base_cfg)):
+                        msg = (f"🧪 Laboratori: “{name}” {'hyri në ekip pas turneut' if status == 'ekip' else 'u hodh poshtë nga turneu'}")
+                        notify.emit(base_cfg, "laboratori", "", msg)
+                        log(msg)
+                except Exception as e:
+                    log(f"Raporti i ditës dështoi: {e}")
+                today = now_day
             rec = load_recommendation(base_cfg)
             if not rec or time.time() - rec.get("ts", 0) > base_cfg.analyst_hours * 3600:
                 try:

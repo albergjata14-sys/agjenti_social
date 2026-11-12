@@ -11,7 +11,7 @@ import numpy as np
 import pandas as pd
 import streamlit as st
 
-from . import analyst, futures, journal, notify, sentiment
+from . import analyst, futures, journal, memory, notify, sentiment
 from .backtest import backtest
 from .bot import is_running, stop_file
 from .broker import Broker
@@ -638,6 +638,75 @@ def tab_analyst(cfg, exchange):
                     "dhe ndarja e kapitalit mes të tjerave ndihmoi më shumë. As kjo nuk garanton fitim.")
 
 
+SERIES = ["#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#e87ba4", "#008300", "#6250d6", "#e34948"]
+
+
+def tab_memory(cfg):
+    st.caption("Kujtesa e robotit: çdo vendim, tregti dhe kapitali i çdo strategjie ruhen ditë pas dite; çdo ditë "
+               "shkruhet një raport dhe laboratori krijon strategji të reja.")
+    if not cfg.memory_file or not Path(cfg.memory_file).exists():
+        return st.info("Kujtesa është bosh. Mbushet kur punon roboti si ekip (`nis --ekip` ose `start_ekipi.bat`).")
+    days = st.select_slider("Periudha", [1, 3, 7, 14, 30, 90], 7, format_func=lambda d: f"{d} ditë", key="mem_days")
+    since = time.time() - days * 86400
+    eq = memory.query(cfg, "SELECT ts, strategy, equity FROM equity WHERE ts>=? AND strategy NOT LIKE 'Turne%'", (since,))
+    if len(eq):
+        eq["koha"] = pd.to_datetime(eq["ts"], unit="s", utc=True).dt.tz_convert("Europe/Tirane")
+        start = eq.sort_values("ts").groupby("strategy")["equity"].transform("first")
+        eq["%"] = (eq["equity"] / start - 1) * 100
+        order = ["Ekipi"] + sorted(s for s in eq["strategy"].unique() if s != "Ekipi")
+        st.markdown("**Si ka ecur çdo strategji e ekipit (%)**")
+        if eq["ts"].nunique() < 3:
+            st.caption("Grafiku mbushet pas disa cikleve të robotit.")
+        st.altair_chart(alt.Chart(eq).mark_line(strokeWidth=2).encode(
+            x=alt.X("koha:T", title=None, axis=alt.Axis(grid=False, format="%d %b %H:%M")),
+            y=alt.Y("%:Q", title="Ndryshimi nga fillimi i periudhës (%)", axis=alt.Axis(gridOpacity=0.25, format="+.1f")),
+            color=alt.Color("strategy:N", title=None, sort=order, scale=alt.Scale(domain=order, range=SERIES[:len(order)]),
+                            legend=alt.Legend(orient="bottom", columns=2, labelLimit=320)),
+            tooltip=[alt.Tooltip("strategy:N", title="Strategjia"), alt.Tooltip("koha:T", title="Koha", format="%d %b %H:%M"),
+                     alt.Tooltip("%:Q", format="+.2f"), alt.Tooltip("equity:Q", title="Kapitali", format=",.2f")],
+        ).properties(height=300), width="stretch")
+    reports = memory.query(cfg, "SELECT day, text FROM reports ORDER BY day DESC LIMIT 30")
+    st.markdown("**Raportet ditore**")
+    if not len(reports):
+        st.caption("Raporti i parë shkruhet kur mbaron dita e parë e plotë (mesnata UTC).")
+    for _, r in reports.iterrows():
+        with st.expander(f"📔 {r['day']}"):
+            st.text(r["text"])
+    tr = memory.query(cfg, "SELECT ts_close, strategy, symbol, side, entry, exit, pnl, pnl_pct, reason FROM trades "
+                           "WHERE ts_close>=? ORDER BY ts_close DESC", (since,))
+    m = st.columns(3)
+    team_tr = tr[~tr["strategy"].str.startswith("Turne")]
+    m[0].metric("Tregti të ekipit", len(team_tr))
+    m[1].metric("Fituese", f"{int((team_tr['pnl'] > 0).sum())}" if len(team_tr) else "–")
+    m[2].metric("Fitimi i mbyllur", f"{team_tr['pnl'].sum():+.2f} {cfg.quote}" if len(team_tr) else "–")
+    if len(tr):
+        with st.expander(f"Të gjitha tregtitë e periudhës ({len(tr)}, përfshirë turneun)"):
+            tr["ts_close"] = pd.to_datetime(tr["ts_close"], unit="s", utc=True).dt.tz_convert("Europe/Tirane").dt.strftime("%d %b %H:%M")
+            st.dataframe(tr.rename(columns={"ts_close": "Mbyllur", "strategy": "Strategjia", "symbol": "Monedha",
+                                            "side": "Drejtimi", "entry": "Hyrja", "exit": "Dalja", "pnl": "Fitim/humbje",
+                                            "pnl_pct": "%", "reason": "Arsyeja"}), width="stretch", hide_index=True)
+    st.markdown("**Laboratori: strategjitë e reja**")
+    labs = memory.strategies(cfg)
+    if not labs:
+        return st.caption(f"Laboratori nis vetë çdo {cfg.lab_hours:g} orë kur punon ekipi, ose me "
+                          "`python -m crypto_bot laboratori`.")
+    fwd = analyst.forward_results(cfg)
+    names = {"provuar": "provuar", "turne": "🏁 në turne", "ekip": "✅ në ekip", "hedhur": "✖ hedhur"}
+    st.dataframe(pd.DataFrame([{
+        "Gjendja": names.get(s["status"], s["status"]), "Strategjia": s["name"], "Mësimi %": s["train"],
+        "Kontrolli %": s["test"], "Turne %": (fwd.get(s["id"]) or {}).get("return_pct"),
+        "Tregti turne": (fwd.get(s["id"]) or {}).get("trades", "–"), "Shënim": s["note"] or ""}
+        for s in sorted(labs, key=lambda s: (["ekip", "turne", "provuar", "hedhur"].index(s["status"])
+                                             if s["status"] in names else 9, -(s["test"] or -999)))]),
+        width="stretch", hide_index=True, column_config={
+            "Mësimi %": st.column_config.NumberColumn(format="%+.1f"),
+            "Kontrolli %": st.column_config.NumberColumn(format="%+.1f"),
+            "Turne %": st.column_config.NumberColumn(format="%+.2f")})
+    st.caption(f"Rruga e një strategjie të re: provë në të kaluarën → turne me para demo → ekip pas {cfg.promote_days:g} "
+               "ditësh fitimi në turne (të paktën 15 tregti). Laboratori provon shumë variante, ndaj disa duken mirë "
+               "rastësisht; turneu në kohë reale është prova që vendos.")
+
+
 def _backtest_section(cfg, exchange, symbol):
     n = st.select_slider("Sa qirinj historikë", [1000, 2000, 3000, 5000], 3000)
     if not st.button("Provo strategjinë në të kaluarën"):
@@ -765,9 +834,9 @@ def render():
     if got is None:
         return
     cfg, exchange, symbol = got
-    tabs = st.tabs(["📈 Grafiku", "🌐 Tregu", "🧠 Analisti", "🤖 Roboti", "🔔 Njoftime", "🧪 Prova"])
+    tabs = st.tabs(["📈 Grafiku", "🌐 Tregu", "🧠 Analisti", "🤖 Roboti", "📔 Kujtesa", "🔔 Njoftime", "🧪 Prova"])
     calls = [(tab_chart, (cfg, exchange, symbol)), (tab_market, (cfg, exchange)), (tab_analyst, (cfg, exchange)),
-             (tab_robot, (cfg, exchange)),
+             (tab_robot, (cfg, exchange)), (tab_memory, (cfg,)),
              (tab_alerts, (cfg, symbol, None)), (tab_tests, (cfg, exchange, symbol))]
     for tab, (fn, args) in zip(tabs, calls):
         with tab:

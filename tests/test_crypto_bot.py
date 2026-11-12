@@ -1031,3 +1031,78 @@ def test_analyst_approves_and_team_trades(tmp_path):
 def notify_recent(cfg):
     from crypto_bot import notify
     return notify.recent(cfg, 100)
+
+
+def test_memory_records_and_daily_report(tmp_path):
+    import time as _time
+
+    from crypto_bot import memory
+
+    cfg = Config(label="M")
+    day = memory._day(_time.time())
+    memory.log_equity(cfg, [("Ekipi", 1000.0, 0), ("M", 500.0, 0)])
+    memory.log_equity(cfg, [("Ekipi", 1010.0, 1), ("M", 506.0, 1)])
+    memory.log_trade(cfg, "BTC/USDT", {"opened": 1.0, "closed": _time.time(), "side": "long", "entry": 100, "exit": 110,
+                                       "pnl": 10, "pnl_pct": 10, "reason": "sinjal"})
+    memory.log_market(cfg, [("BTC/USDT", 100.0, 1.0), ("ETH/USDT", 10.0, 2.0)])
+    memory.log_market(cfg, [("BTC/USDT", 102.0, 1.0), ("ETH/USDT", 9.0, 2.0)])
+    memory.log_event(cfg, "vendim", "BTC/USDT", "BLI", 100.0, {"reason": "x"})
+    r = memory.daily_report(cfg, day)
+    team = next(x for x in r["strategies"] if x["name"] == "Ekipi")
+    assert team["pct"] == pytest.approx(1.0) and r["trades"] == 1 and r["wins"] == 1 and r["entries"] == 1
+    assert r["btc"] == pytest.approx(2.0) and r["best"][0]["symbol"] == "BTC/USDT" and r["worst"][0]["symbol"] == "ETH/USDT"
+    text = memory.save_report(cfg, r)
+    assert "Ekipi: 1000.00 → 1010.00 (+1.00%)" in text and "BTC gjatë ditës: +2.00%" in text
+    assert memory.query(cfg, "SELECT COUNT(*) AS n FROM reports")["n"].iloc[0] == 1
+
+    # Roboti shkruan vetë në kujtesë çdo vendim dhe çdo tregti të mbyllur.
+    bc = Config(symbols=["BTC/USDT"], candles=300, strategy="score", daily_trend_ema=0, market_filter_symbol="",
+                state_file=str(tmp_path / "s.json"), log_file=str(tmp_path / "d.jsonl"), take_profit_pct=4)
+    ex = make_fake({"BTC/USDT": trend(400, 100, 0.002)})
+    b = Broker(bc)
+    run_cycle(ex, b, bc)
+    ex.last["BTC/USDT"] = b.positions["BTC/USDT"]["entry"] * 1.05
+    run_cycle(ex, b, bc)
+    ev = memory.query(bc, "SELECT action FROM events WHERE kind='vendim'")
+    assert "BLI" in set(ev["action"])
+    assert memory.query(bc, "SELECT reason FROM trades")["reason"].iloc[-1] == "take-profit"
+
+
+def test_lab_creates_tests_and_promotes(tmp_path):
+    import random
+    import time as _time
+
+    from crypto_bot import analyst, lab, memory
+
+    rng = random.Random(1)
+    for _ in range(50):
+        o = lab.random_overrides(rng)
+        cfg = analyst.candidate_config(Config(), {"overrides": o})       # çdo strategji e krijuar është e vlefshme
+        assert cfg.strategy in lab.SPACE and set(o) <= lab.FIELDS and set(o) - {"strategy"} <= analyst.STRATEGY_FIELDS
+        child = lab.mutate(o, rng)
+        assert child["strategy"] == o["strategy"] and sum(child[k] != o[k] for k in o) <= 2
+    assert lab.strategy_id({"a": 1, "b": 2}) == lab.strategy_id({"b": 2, "a": 1})
+    assert "momentum 7d" in lab.describe(lab.complete({"strategy": "momentum", "momentum_days": 7.0}, rng))
+
+    frames = {f"C{i}/USDT": (candles(trend(1500, 100, 0.002, 0.01, seed=i)), None) for i in range(3)}
+    base = Config(daily_trend_ema=0, market_filter_symbol="", max_evolved=2)
+    rows = lab.run_lab({"1h": frames, "4h": frames}, base, n=6, seed=3, test_days=20, log=lambda *_: None)
+    saved = memory.strategies(base)
+    assert len(rows) == 6 and len(saved) == 6
+    turne = [s for s in saved if s["status"] == "turne"]
+    assert 0 < len(turne) <= 2 and all(s["test"] > 0 and s["train"] > 0 for s in turne)
+    # Të njëjtat strategji nuk provohen dy herë.
+    assert not {r["id"] for r in lab.run_lab({"1h": frames, "4h": frames}, base, n=3, seed=3, test_days=20,
+                                             log=lambda *_: None)} & {s["id"] for s in saved}
+    # Kandidatët: turneu përfshin strategjitë e laboratorit, ekipi vetëm ato të ngritura.
+    assert len(analyst.tournament_candidates(base)) == len(analyst.CANDIDATES) + len(turne)
+    assert len(analyst.team_candidates(base)) == len(analyst.CANDIDATES)
+    a, b2 = turne[0], (turne[1] if len(turne) > 1 else None)
+    now = _time.time()
+    fwd = {a["id"]: {"return_pct": 3.0, "trades": 20, "since": now - 20 * 86400}}
+    if b2:
+        fwd[b2["id"]] = {"return_pct": -8.0, "trades": 16, "since": now - 3 * 86400}
+    changes = dict(lab.review_tournament(base, fwd, now))
+    assert changes[a["name"]] == "ekip" and (not b2 or changes[b2["name"]] == "hedhur")
+    assert {c["id"] for c in analyst.team_candidates(base)} >= {a["id"]}
+    assert "evo_" in analyst.shadow_state_file(base, a)

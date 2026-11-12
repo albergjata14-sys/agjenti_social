@@ -38,7 +38,30 @@ CANDIDATES = [
      "overrides": {"strategy": "score", "timeframe": "4h", "allow_short": False, "take_profit_pct": 4.0,
                    "stop_loss_pct": 2.0}},
 ]
-STRATEGY_FIELDS = {"strategy", "timeframe", "allow_short", "momentum_days", "take_profit_pct", "stop_loss_pct"}
+STRATEGY_FIELDS = {"strategy", "timeframe", "allow_short", "momentum_days", "take_profit_pct", "stop_loss_pct",
+                   "momentum_min_pct", "momentum_ema", "breakout_entry", "breakout_exit", "trend_ema", "daily_trend_ema"}
+
+
+def _evolved(cfg, statuses):
+    from . import memory
+
+    if not cfg.memory_file:
+        return []
+    try:
+        return [{"id": s["id"], "name": s["name"], "overrides": s["overrides"], "origin": "laboratori"}
+                for s in memory.strategies(cfg, statuses)]
+    except Exception:
+        return []
+
+
+def team_candidates(cfg) -> list:
+    """Strategjitë që analisti vlerëson dhe ekipi mund t'i luajë: bazë + ato të laboratorit të ngritura në ekip."""
+    return CANDIDATES + _evolved(cfg, ["ekip"])
+
+
+def tournament_candidates(cfg) -> list:
+    """Strategjitë që provohen në turne: bazë + ato të laboratorit në turne ose në ekip."""
+    return CANDIDATES + _evolved(cfg, ["turne", "ekip"])
 
 
 def candidate_config(base, cand):
@@ -131,7 +154,7 @@ def choose(rows: list, forward: dict = None) -> dict:
 def forward_results(base_cfg) -> dict:
     """Rezultatet e turneut (prova paralele me para demo në kohë reale) nga skedarët e gjendjes."""
     out = {}
-    for cand in CANDIDATES:
+    for cand in tournament_candidates(base_cfg):
         p = Path(shadow_state_file(base_cfg, cand))
         if not p.exists():
             continue
@@ -150,26 +173,49 @@ def shadow_state_file(base_cfg, cand) -> str:
     return base_cfg.state_file.replace(".json", f"_turne_{cand['id']}.json")
 
 
-def analyze_market(exchange, base_cfg, n_symbols: int = 20, test_days: int = 120, log=print) -> dict:
-    """Shkarkon historinë, provon kandidatët dhe ruan rekomandimin te `recommendation_file`."""
+def lab_due(cfg) -> bool:
+    from . import memory
+
+    if not cfg.lab_hours or not cfg.memory_file:
+        return False
+    try:
+        last = memory.query(cfg, "SELECT MAX(ts) AS t FROM events WHERE kind='laboratori'")["t"].iloc[0]
+    except Exception:
+        return True
+    return last is None or pd.isna(last) or time.time() - float(last) > cfg.lab_hours * 3600
+
+
+def analyze_market(exchange, base_cfg, n_symbols: int = 20, test_days: int = 120, log=print, run_lab=None) -> dict:
+    """Shkarkon historinë, (kur i vjen radha) nis laboratorin, provon kandidatët dhe ruan rekomandimin."""
     t0 = time.time()
     symbols = top_symbols(exchange, base_cfg.quote, n_symbols)
     if base_cfg.market_filter_symbol and base_cfg.market_filter_symbol not in symbols:
         symbols.append(base_cfg.market_filter_symbol)
-    need = {}
-    for cand in CANDIDATES:
+    candidates = team_candidates(base_cfg)
+    run_lab = lab_due(base_cfg) if run_lab is None else run_lab
+    need = {"4h": 5000, "1h": 4000} if run_lab else {}
+    for cand in candidates:
         tf = cand["overrides"].get("timeframe", base_cfg.timeframe)
         need[tf] = 5000 if tf in ("4h", "1d") else 4000
     frames_by_tf = {}
     for tf, n in need.items():
         log(f"Analisti po shkarkon {n} qirinj {tf} për {len(symbols)} monedha...")
         frames_by_tf[tf] = load_frames(exchange, base_cfg, symbols, tf, n)
-    rows = evaluate(frames_by_tf, base_cfg, test_days=test_days)
+    lab_rows = []
+    if run_lab:
+        from . import lab, memory
+
+        lab_rows = lab.run_lab(frames_by_tf, base_cfg, n=base_cfg.lab_candidates, test_days=test_days, log=log)
+        passed = sum(1 for r in lab_rows if r.get("eligible"))
+        memory.log_event(base_cfg, "laboratori", detail={"tested": len(lab_rows), "passed": passed})
+        log(f"Laboratori provoi {len(lab_rows)} strategji të reja; {passed} fituan në të dyja periudhat.")
+    rows = evaluate(frames_by_tf, base_cfg, candidates, test_days=test_days)
     fwd = forward_results(base_cfg)
     rec = choose(rows, fwd)
     rec.update({"time": datetime.now(timezone.utc).isoformat(timespec="seconds"), "ts": time.time(),
                 "test_days": test_days, "symbols": len(frames_by_tf.get("4h", {})), "results": rows, "forward": fwd,
-                "seconds": round(time.time() - t0)})
+                "seconds": round(time.time() - t0), "lab_tested": len(lab_rows),
+                "lab_passed": sum(1 for r in lab_rows if r.get("eligible"))})
     Path(base_cfg.recommendation_file).write_text(json.dumps(rec, indent=2, ensure_ascii=False))
     return rec
 
@@ -184,7 +230,7 @@ def team_config(base_cfg, cand, approved, n_members: int = None):
 
 def tournament_config(base_cfg, cand):
     """Prova paralele: çdo strategji me gjithë kapitalin demo, pa njoftime, gjithmonë aktive."""
-    return replace(candidate_config(base_cfg, cand), label=cand["name"], scan_market=True, pause_entries=False,
+    return replace(candidate_config(base_cfg, cand), label=f"Turne · {cand['name']}", scan_market=True, pause_entries=False,
                    state_file=shadow_state_file(base_cfg, cand), log_file="", notify_file="", notify_telegram=False,
                    notify_trades=False, notify_signals=False, alert_move_pct=0.0, alerts_file="")
 

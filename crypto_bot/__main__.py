@@ -54,7 +54,7 @@ def run_alerts(exchange, cfg):
 
 def main(argv=None):
     p = argparse.ArgumentParser(prog="crypto_bot", description="Robot analize dhe tregtimi për kriptomonedha")
-    p.add_argument("komanda", choices=["analizo", "skano", "backtest", "portofol", "nis", "ditar", "njoftime", "analist"])
+    p.add_argument("komanda", choices=["analizo", "skano", "backtest", "portofol", "nis", "ditar", "njoftime", "analist", "laboratori", "raport"])
     p.add_argument("--ekip", action="store_true",
                    help="nis: analisti miraton strategjitë dhe tregtari i luan të gjitha njëkohësisht (simulim)")
     p.add_argument("--pa-turne", action="store_true", help="nis --ekip: pa provën paralele të të gjitha strategjive")
@@ -99,6 +99,20 @@ def main(argv=None):
             raise ValueError("ekipi punon vetëm në simulim; nise pa --live")
         from .bot import run_team_forever
         return run_team_forever(connect(cfg), cfg, tournament=not a.pa_turne)
+    if a.komanda == "raport":
+        from . import memory
+        from datetime import datetime, timezone
+        print(memory.save_report(cfg, memory.daily_report(cfg, memory.yesterday())))
+        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        return print("\nSot deri tani:\n" + memory.report_text(memory.daily_report(cfg, today)))
+    if a.komanda == "laboratori":
+        from .analyst import analyze_market
+        rec = analyze_market(connect(cfg), cfg, n_symbols=a.monedha, log=log, run_lab=True)
+        from . import memory
+        print(f"\nLaboratori provoi {rec['lab_tested']} strategji; {rec['lab_passed']} kaluan të dyja periudhat.")
+        for s in memory.strategies(cfg, ["turne", "ekip"]):
+            print(f"  [{s['status']}] {s['name']}: mësimi {s['train']:+.1f}% | kontrolli {s['test']:+.1f}%")
+        return
     if a.komanda == "analist":
         from .analyst import analyze_market
         rec = analyze_market(connect(cfg), cfg, n_symbols=a.monedha, log=log)
