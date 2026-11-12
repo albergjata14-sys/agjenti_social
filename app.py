@@ -1,6 +1,29 @@
 import streamlit as st
 import datetime
 
+def _load_crypto_panel():
+    """Kthen panelin e robotit, duke e ringarkuar kodin e tij kur skedarët kanë ndryshuar.
+
+    Pas një përditësimi, serveri mund të mbajë në memorie modulet e vjetra të `crypto_bot` krahas
+    skedarëve të rinj; kjo përzierje jep gabime. Prandaj modulet hiqen nga memoria sa herë ndryshon kodi.
+    """
+    import pathlib
+    import sys
+
+    folder = pathlib.Path(__file__).parent / "crypto_bot"
+    stamp = max(f.stat().st_mtime for f in folder.iterdir() if f.is_file())
+    loaded = [name for name in sys.modules if name == "crypto_bot" or name.startswith("crypto_bot.")]
+    if loaded and getattr(sys, "_crypto_bot_stamp", None) != stamp:
+        for name in loaded:
+            del sys.modules[name]
+        st.cache_resource.clear()
+        st.cache_data.clear()
+    sys._crypto_bot_stamp = stamp
+    from crypto_bot.ui import render
+
+    return render
+
+
 # Konfigurimi i faqes
 st.set_page_config(page_title="Smart Albania - Multi-Agent System", page_icon="🤖", layout="centered")
 
@@ -60,8 +83,7 @@ if selected_agent == "Master CEO (Qendra & Memoria)":
 
 # 2. ROBOTI I KRIPTOVE (ANALIZË, PARASHIKIM, BACKTEST)
 elif selected_agent == "Crypto Trading Agent":
-    from crypto_bot.ui import render as render_crypto
-    render_crypto()
+    _load_crypto_panel()()
 
 # 3. LOGJIKA E AGJENTEVE TË TJERË (QË NUK HUMBASIN MË)
 else:
