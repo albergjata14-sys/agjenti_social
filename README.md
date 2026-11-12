@@ -16,16 +16,40 @@ Në Windows: dopio-klik te `start_robot.bat`. Hapet në shfletues te `http://loc
 (herën e parë instalon vetë libraritë). Në sisteme të tjera: `streamlit run crypto_app.py`.
 I njëjti panel gjendet edhe te `app.py`, si zgjedhja "Crypto Trading Agent".
 
-- **Grafiku** – qirinjtë e gjallë (rifreskim çdo 15 sekonda), një fjali që thotë çfarë po bën roboti,
-  vijat Hyrja / Stop-loss / Fitimi (TP) të pozicionit të hapur dhe trekëndësha për çdo hyrje e dalje.
-  Poshtë janë butonat Bli / Shit short / Mbyll për provat me dorë me para demo.
-- **Roboti** – Nis / Ndalo, kapitali demo, pozicionet, tregtitë dhe arsyet e vendimeve. Roboti niset
-  me rregullimet që shihen në panel.
-- **Tregu** – monedhat më të tregtuara, të renditura sipas afërsisë me sinjalin e blerjes.
+- Lart: çmimet e gjalla të 6 monedhave kryesore dhe zgjedhja e monedhës; mënyra dhe rregullimet në "⚙️".
+- **Grafiku** – grafik i gjallë me [TradingView Lightweight Charts™](https://www.tradingview.com/)
+  (rifreskim çdo 5 sekonda): zmadhim me rrotën e miut ose me dy gishta, lëvizje duke tërhequr, butonat
+  "E gjitha", "Tani" dhe "Zmadho". Tregon vijat Hyrja / Stop-loss / Fitimi (TP), shigjeta për hyrjet dhe
+  rrathë për daljet. Poshtë: Bli / Shit short / Mbyll për provat me dorë me para demo.
+- **Tregu** – ecuria e 10–30 monedhave: 24 orë, 7 ditë, lëvizja 14-ditore, gjendja, sinjali i robotit dhe
+  "gjasat historike" për 24 orët e ardhshme (shih më poshtë se çfarë janë).
+- **Roboti** – Nis / Ndalo, kapitali demo, pozicionet, tregtitë dhe arsyet e vendimeve.
+- **Njoftime** – lidhja me Telegram, alarmet e çmimit dhe njoftimet e fundit.
 - **Prova** – prova në të kaluarën dhe ditari i parashikimeve.
 
-Dy mënyra: **Aktive (lart dhe poshtë)** dhe **E kujdesshme** (pak tregti, vetëm blerje në thyerje maje
-kur tregu është në ngritje). Te "Rregullime" vendosen stop-loss dhe fitimi në përqindje.
+### Njoftimet
+
+Roboti njofton çdo hyrje e dalje, sinjalet e reja te monedhat e ndjekura, lëvizjet mbi
+`alert_move_pct` (5%) dhe alarmet e çmimit që vendos ti. Njoftimet shfaqen në panel dhe, kur lidhet,
+vijnë në telefon përmes Telegram-it:
+
+```bash
+python -m crypto_bot njoftime lidh                   # një herë: lidh robotin tënd të Telegram-it
+python -m crypto_bot njoftime test                   # mesazh provë
+python -m crypto_bot njoftime shto --symbol BTC/USDT --mbi 80000   # alarm çmimi
+python -m crypto_bot njoftime                        # vetëm njoftime, pa tregtuar
+```
+
+Tokeni ruhet te `crypto_bot_telegram.json` (jashtë git-it). Në Streamlit Cloud vendosen te Settings →
+Secrets si `TELEGRAM_BOT_TOKEN` dhe `TELEGRAM_CHAT_ID`. Njoftimet automatike dërgohen nga procesi që
+punon (`nis` ose `njoftime`); në Streamlit Cloud ai nuk rri ndezur, ndaj atje kontrollohen vetëm alarmet e
+çmimit sa kohë është e hapur faqja.
+
+**Gjasat historike** te "Tregu" janë sa herë, në të kaluarën e këtyre monedhave, çmimi ishte më lart pas
+24 orësh kur tregu ishte në gjendje të ngjashme. Nuk janë parashikim: në një provë jashtë mostrës
+(40 monedha, 2024–2026) e qëlluan drejtimin 51% të herëve, më pak se 53% që do të jepte gjithmonë
+"poshtë" në atë periudhë. Për "AI Analysis" të MEXC nuk gjeta asnjë përshkrim të metodës; mund ta
+matësh vetë me ditarin e parashikimeve.
 
 Roboti i nisur nga paneli vazhdon të punojë edhe kur mbyllet faqja; ndalet me butonin Ndalo.
 

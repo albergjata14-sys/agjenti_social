@@ -1,7 +1,9 @@
 """Rreshti i komandës:  python -m crypto_bot {analizo|skano|backtest|nis}"""
 import argparse
+import time
 
-from . import journal
+from . import journal, notify
+from .bot import log
 from .backtest import backtest, format_backtest, format_portfolio, portfolio_backtest
 from .bot import run_forever, scan
 from .broker import Broker
@@ -10,10 +12,53 @@ from .data import connect, fetch_candles, fetch_daily, top_symbols
 from .strategy import format_report
 
 
+def telegram_setup(action: str):
+    """Lidh Telegram-in: ruan tokenin e robotit dhe gjen vetë chat_id pasi i shkruan robotit."""
+    if action == "test":
+        ok = notify.telegram_send("✅ Njoftimet e robotit të kriptove punojnë.")
+        return print("Mesazhi u dërgua në Telegram." if ok else
+                     "Telegram-i nuk është lidhur ose mesazhi nuk shkoi. Lidhe me: python -m crypto_bot njoftime lidh")
+    import getpass
+
+    print("1) Në Telegram hap @BotFather, shkruaj /newbot dhe ndiq hapat. Do të marrësh një token.")
+    token = getpass.getpass("2) Ngjite tokenin këtu (nuk shfaqet në ekran) dhe shtyp Enter: ").strip()
+    input("3) Hap robotin tënd të ri në Telegram, shtyp Start ose shkruaji një mesazh, pastaj shtyp Enter këtu...")
+    chat = notify.telegram_find_chat(token)
+    if not chat:
+        return print("Nuk u gjet asnjë mesazh. Shkruaji robotit në Telegram dhe provo prapë.")
+    notify.telegram_save(token, chat)
+    ok = notify.telegram_send("✅ Roboti i kriptove u lidh. Këtu do të marrësh njoftimet.", (token, chat))
+    print(f"U lidh dhe u ruajt te {notify.TELEGRAM_FILE}." + ("" if ok else " Por mesazhi provë nuk shkoi."))
+
+
+def run_alerts(exchange, cfg):
+    """Vetëm njoftime, pa tregtuar: sinjale të reja, lëvizje të mëdha dhe alarme çmimi."""
+    from .bot import scan, watchlist
+
+    state = {}
+    log(f"Njoftimet u nisën për {'gjithë tregun' if cfg.scan_market else ', '.join(cfg.symbols)}. Ctrl+C për t'i ndalur.")
+    if not notify.telegram_settings():
+        log("Telegram-i nuk është lidhur: njoftimet shfaqen vetëm në panel. Lidhe me: njoftime lidh")
+    while True:
+        try:
+            symbols = list(dict.fromkeys(watchlist(exchange, cfg) + [x["symbol"] for x in notify.load_alerts(cfg)]))
+            results = scan(exchange, cfg, symbols)
+            sent = notify.check_market(cfg, state, results)
+            sent += notify.check_price_alerts(cfg, {r["symbol"]: r["price"] for r in results})
+            for e in sent:
+                log(e["text"])
+        except Exception as e:
+            log(f"Gabim gjatë kontrollit (do të riprovohet): {e}")
+        time.sleep(cfg.poll_seconds)
+
+
 def main(argv=None):
     p = argparse.ArgumentParser(prog="crypto_bot", description="Robot analize dhe tregtimi për kriptomonedha")
-    p.add_argument("komanda", choices=["analizo", "skano", "backtest", "portofol", "nis", "ditar"])
-    p.add_argument("veprimi", nargs="?", choices=["shto"], help="vetëm për 'ditar': shto një parashikim")
+    p.add_argument("komanda", choices=["analizo", "skano", "backtest", "portofol", "nis", "ditar", "njoftime"])
+    p.add_argument("veprimi", nargs="?", choices=["shto", "lidh", "test"],
+                   help="ditar: shto | njoftime: lidh (Telegram), test, shto (alarm çmimi)")
+    p.add_argument("--mbi", type=float, help="njoftime shto: njofto kur çmimi ngjitet mbi këtë nivel")
+    p.add_argument("--nen", type=float, help="njoftime shto: njofto kur çmimi bie nën këtë nivel")
     p.add_argument("--drejtimi", choices=["rritje", "renie", "rënie"], help="ditar: drejtimi i parashikuar")
     p.add_argument("--ore", type=float, default=24, help="ditar: afati i parashikimit në orë")
     p.add_argument("--perqindja", type=float, help="ditar: sa %% siguri jep burimi")
@@ -61,7 +106,17 @@ def main(argv=None):
             cfg.log_file = cfg.log_file.replace(".jsonl", tag + ".jsonl")
         return run_forever(exchange, Broker(cfg, exchange if a.live else None), cfg)
 
+    if a.komanda == "njoftime" and a.veprimi in ("lidh", "test"):
+        return telegram_setup(a.veprimi)
     exchange = connect(cfg)
+    if a.komanda == "njoftime":
+        if a.veprimi == "shto":
+            if (a.mbi is None) == (a.nen is None):
+                raise ValueError("jep njërin nga --mbi ose --nen, p.sh. --mbi 80000")
+            al = notify.add_alert(cfg, cfg.symbols[0], "mbi" if a.mbi is not None else "nen", a.mbi or a.nen)
+            return print(f"Alarmi u ruajt: {al['symbol']} {al['direction']} {al['price']:,.6g}. "
+                         "Kontrollohet kur punon `nis` ose `njoftime`.")
+        return run_alerts(exchange, cfg)
     if a.komanda == "ditar":
         path = cfg.predictions_file
         if a.veprimi == "shto":

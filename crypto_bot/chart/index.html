@@ -1,0 +1,163 @@
+<!doctype html>
+<html lang="sq">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  :root { --bg: #ffffff; --ink: #31333f; --muted: #6b6d76; --line: rgba(49, 51, 63, 0.14); --btn: rgba(49, 51, 63, 0.06); }
+  html, body { margin: 0; padding: 0; background: var(--bg); color: var(--ink);
+               font-family: "Source Sans Pro", "Source Sans 3", system-ui, -apple-system, "Segoe UI", sans-serif; }
+  .bar { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 14px; padding: 6px 2px 8px; min-height: 30px; }
+  .sym { font-weight: 700; font-size: 16px; }
+  .tf { font-size: 12px; color: var(--muted); border: 1px solid var(--line); border-radius: 6px; padding: 1px 6px; }
+  .px { font-weight: 700; font-size: 16px; font-variant-numeric: tabular-nums; }
+  .chg { font-size: 13px; font-variant-numeric: tabular-nums; color: var(--muted); }
+  .ohlc { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; flex: 1 1 260px; }
+  .tools { display: flex; gap: 6px; margin-left: auto; }
+  button { font: inherit; font-size: 13px; color: var(--ink); background: var(--btn); border: 1px solid var(--line);
+           border-radius: 8px; padding: 4px 10px; cursor: pointer; min-height: 30px; }
+  button:hover { border-color: var(--muted); }
+  #chart { width: 100%; position: relative; }
+  .foot { display: flex; justify-content: space-between; gap: 8px; font-size: 11px; color: var(--muted); padding: 4px 2px 0; }
+  .foot a { color: var(--muted); }
+</style>
+</head>
+<body>
+  <div class="bar">
+    <span class="sym" id="sym">–</span><span class="tf" id="tf"></span>
+    <span class="px" id="px"></span><span class="chg" id="chg"></span>
+    <span class="ohlc" id="ohlc">Prek grafikun për të parë një qiri.</span>
+    <span class="tools">
+      <button id="fit" title="Shfaq të gjithë historinë">↔ E gjitha</button>
+      <button id="now" title="Kthehu te qiriri i fundit">⟲ Tani</button>
+      <button id="big" title="Zmadho ose zvogëlo grafikun">⤢ Zmadho</button>
+    </span>
+  </div>
+  <div id="chart"></div>
+  <div class="foot">
+    <span>Zmadho me rrotën e miut ose me dy gishta · lëviz duke tërhequr · ora jote lokale</span>
+    <span>Grafiku: <a href="https://www.tradingview.com/" target="_blank" rel="noopener">TradingView Lightweight Charts™</a></span>
+  </div>
+<script src="./lightweight-charts.standalone.production.js"></script>
+<script>
+"use strict";
+// Lidhja me Streamlit pa librari shtesë: mesazhet "componentReady", "render" dhe "setFrameHeight".
+const send = (type, extra) => window.parent.postMessage(Object.assign({ isStreamlitMessage: true, type }, extra), "*");
+let chart = null, candles, volume, ema, lines = [], key = null, lastTime = null, baseHeight = 440, big = false, palette;
+const $ = (id) => document.getElementById(id);
+const tzOffset = -new Date().getTimezoneOffset() * 60;           // sekonda: koha UTC → ora lokale e shikuesit
+const fmt = (v, p) => v == null ? "–" : Number(v).toLocaleString("sq-AL", { minimumFractionDigits: p, maximumFractionDigits: p });
+let precision = 2;
+
+function colors(theme) {
+  const dark = theme && theme.base === "dark";
+  const bg = (theme && theme.backgroundColor) || (dark ? "#0e1117" : "#ffffff");
+  const ink = (theme && theme.textColor) || (dark ? "#fafafa" : "#31333f");
+  // Blu = rritje, portokalli = rënie: dallohen edhe nga kush nuk i dallon jeshilen nga e kuqja.
+  return { dark, bg, ink, up: dark ? "#3987e5" : "#2a78d6", down: dark ? "#d95926" : "#eb6834",
+           ema: dark ? "#9085e9" : "#6250d6", grid: dark ? "rgba(250,250,250,0.06)" : "rgba(49,51,63,0.06)",
+           muted: dark ? "#a3a8b8" : "#6b6d76", line: dark ? "rgba(250,250,250,0.16)" : "rgba(49,51,63,0.14)" };
+}
+
+function setHeight() {
+  const h = big ? Math.max(Math.round(baseHeight * 1.6), 680) : baseHeight;
+  $("chart").style.height = h + "px";
+  send("streamlit:setFrameHeight", { height: document.body.scrollHeight });
+}
+
+function build() {
+  chart = LightweightCharts.createChart($("chart"), {
+    autoSize: true,
+    layout: { attributionLogo: true, fontSize: 12 },
+    rightPriceScale: { borderVisible: false, scaleMargins: { top: 0.08, bottom: 0.22 } },
+    timeScale: { borderVisible: false, timeVisible: true, secondsVisible: false, rightOffset: 6, barSpacing: 8 },
+    crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
+    // Lëvizja vertikale me gisht i lihet faqes, që telefoni të mund të rrëshqasë poshtë.
+    handleScroll: { mouseWheel: true, pressedMouseMove: true, horzTouchDrag: true, vertTouchDrag: false },
+    handleScale: { mouseWheel: true, pinch: true, axisPressedMouseMove: true, axisDoubleClickReset: true },
+  });
+  candles = chart.addCandlestickSeries({ borderVisible: false });
+  volume = chart.addHistogramSeries({ priceScaleId: "vol", priceFormat: { type: "volume" }, lastValueVisible: false, priceLineVisible: false });
+  chart.priceScale("vol").applyOptions({ scaleMargins: { top: 0.82, bottom: 0 } });
+  ema = chart.addLineSeries({ lineWidth: 2, lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: false });
+  chart.subscribeCrosshairMove((p) => {
+    const bar = p && p.seriesData ? p.seriesData.get(candles) : null;
+    if (!bar) { $("ohlc").textContent = "Prek grafikun për të parë një qiri."; return; }
+    const ch = bar.open ? (bar.close / bar.open - 1) * 100 : 0;
+    $("ohlc").textContent = `Hapja ${fmt(bar.open, precision)} · Maja ${fmt(bar.high, precision)} · Fundi ${fmt(bar.low, precision)} · Mbyllja ${fmt(bar.close, precision)} (${ch >= 0 ? "+" : ""}${ch.toFixed(2)}%)`;
+  });
+  $("fit").onclick = () => chart.timeScale().fitContent();
+  $("now").onclick = () => chart.timeScale().scrollToRealTime();
+  $("big").onclick = () => { big = !big; $("big").textContent = big ? "⤡ Zvogëlo" : "⤢ Zmadho"; setHeight(); };
+}
+
+function style(c) {
+  document.documentElement.style.setProperty("--bg", c.bg);
+  document.documentElement.style.setProperty("--ink", c.ink);
+  document.documentElement.style.setProperty("--muted", c.muted);
+  document.documentElement.style.setProperty("--line", c.line);
+  chart.applyOptions({ layout: { background: { type: "solid", color: c.bg }, textColor: c.muted },
+                       grid: { vertLines: { color: c.grid }, horzLines: { color: c.grid } } });
+  candles.applyOptions({ upColor: c.up, downColor: c.down, wickUpColor: c.up, wickDownColor: c.down,
+                         priceFormat: { type: "price", precision, minMove: Math.pow(10, -precision) } });
+  ema.applyOptions({ color: c.ema });
+}
+
+function render(args, theme) {
+  if (!chart) build();
+  palette = colors(theme);
+  const rows = args.candles || [];
+  if (!rows.length) return;
+  const last = rows[rows.length - 1];
+  precision = Math.max(2, Math.min(8, 4 - Math.floor(Math.log10(Math.abs(last[4]) || 1))));
+  style(palette);
+  const bars = rows.map((r) => ({ time: r[0] + tzOffset, open: r[1], high: r[2], low: r[3], close: r[4] }));
+  const vols = rows.map((r) => ({ time: r[0] + tzOffset, value: r[5], color: r[4] >= r[1] ? palette.up + "55" : palette.down + "55" }));
+  const avg = (args.ema || []).map((r) => ({ time: r[0] + tzOffset, value: r[1] }));
+  const newKey = args.symbol + "|" + args.timeframe;
+  if (newKey !== key || lastTime == null || bars[0].time > lastTime) {
+    candles.setData(bars); volume.setData(vols); ema.setData(avg);
+    const n = bars.length;
+    // Sa qirinj shfaqen fillimisht varet nga gjerësia: në telefon më pak, që të dallohen.
+    const show = Math.max(40, Math.min(140, Math.floor(($("chart").clientWidth || 600) / 9)));
+    chart.timeScale().setVisibleLogicalRange({ from: Math.max(0, n - show), to: n + 4 });
+    key = newKey;
+  } else {
+    // Vetëm qirinjtë e rinj ose ai që po lëviz: zmadhimi dhe pozicioni i grafikut ruhen.
+    for (let i = 0; i < bars.length; i++) {
+      if (bars[i].time >= lastTime) { candles.update(bars[i]); volume.update(vols[i]); }
+    }
+    if (avg.length) ema.setData(avg);
+  }
+  lastTime = bars[bars.length - 1].time;
+
+  lines.forEach((l) => candles.removePriceLine(l));
+  lines = (args.levels || []).map((lv) => candles.createPriceLine({
+    price: lv.price, title: lv.name, axisLabelVisible: true, lineWidth: lv.kind === "entry" ? 2 : 1,
+    lineStyle: lv.kind === "entry" ? LightweightCharts.LineStyle.Solid
+             : lv.kind === "level" ? LightweightCharts.LineStyle.Dotted : LightweightCharts.LineStyle.Dashed,
+    color: lv.kind === "stop" ? palette.down : lv.kind === "target" ? palette.up : palette.muted,
+  }));
+  candles.setMarkers((args.marks || []).map((m) => ({
+    time: m.time + tzOffset, text: m.text,
+    position: m.kind === "short" ? "aboveBar" : m.kind === "long" ? "belowBar" : "inBar",
+    shape: m.kind === "short" ? "arrowDown" : m.kind === "long" ? "arrowUp" : "circle",
+    color: m.kind === "exit" ? palette.muted : palette.ink,
+  })).sort((a, b) => a.time - b.time));
+
+  $("sym").textContent = args.symbol;
+  $("tf").textContent = args.timeframe;
+  $("px").textContent = fmt(last[4], precision);
+  const day = args.change_24h;
+  $("chg").textContent = day == null ? "" : `${day >= 0 ? "+" : ""}${day.toFixed(2)}% në 24 orë`;
+  if (args.height && args.height !== baseHeight) baseHeight = args.height;
+  setHeight();
+}
+
+window.addEventListener("message", (event) => {
+  if (event.data && event.data.type === "streamlit:render") render(event.data.args || {}, event.data.theme);
+});
+send("streamlit:componentReady", { apiVersion: 1 });
+</script>
+</body>
+</html>

@@ -4,6 +4,7 @@ import time
 from pathlib import Path
 from datetime import datetime, timezone
 
+from . import notify
 from .data import fetch_candles, fetch_daily, spread_pct, top_symbols
 from .strategy import analyze
 
@@ -187,6 +188,15 @@ def run_cycle(exchange, broker, cfg) -> list:
         if new_candle:
             record(cfg, symbol=sym, action="ANASHKALO" if a["signal"] in ("BLI", "SHORT") else a["signal"],
                    reason=skip, price=a["price"], score=a["score"])
+    # 5) Njoftimet: veprimet e robotit, sinjalet e reja, lëvizjet e mëdha dhe alarmet e çmimit.
+    try:
+        if cfg.notify_trades:
+            for kind, sym, info in actions:
+                notify.emit(cfg, "tregti", sym, notify.trade_message(kind, sym, info, cfg.quote))
+        notify.check_market(cfg, st, results)
+        notify.check_price_alerts(cfg, {a["symbol"]: a["price"] for a in results} | prices)
+    except Exception as e:
+        log(f"Njoftimet dështuan (roboti vazhdon): {e}")
     st["heartbeat"] = time.time()
     broker.save()
     log(f"Kapitali: {broker.equity(prices):.2f} {cfg.quote} (sot {day_pct:+.2f}%"

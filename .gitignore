@@ -9,3 +9,7 @@ crypto_bot_manual*.json
 crypto_bot_output.log
 *.stop
 crypto_bot_ui_config.json
+crypto_bot_telegram.json
+crypto_bot_notifications*.jsonl
+crypto_bot_alerts.json
+.streamlit/secrets.toml

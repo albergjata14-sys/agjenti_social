@@ -66,10 +66,19 @@ class Config:
     state_file: str = "crypto_bot_state.json"
     log_file: str = "crypto_bot_decisions.jsonl"   # çdo vendim me arsyen ("" = pa regjistër)
     predictions_file: str = "crypto_bot_predictions.jsonl"   # ditari i parashikimeve (komanda `ditar`)
+    # --- njoftimet (shih crypto_bot/notify.py) ---
+    notify_file: str = "crypto_bot_notifications.jsonl"   # regjistri i njoftimeve që shfaq paneli
+    alerts_file: str = "crypto_bot_alerts.json"           # alarmet e çmimit të vendosura nga përdoruesi
+    notify_telegram: bool = True       # dërgo njoftimet edhe në Telegram kur është lidhur
+    notify_trades: bool = True         # njofto çdo hyrje dhe dalje të robotit
+    notify_signals: bool = True        # njofto kur një monedhë e ndjekur merr sinjal të ri
+    alert_move_pct: float = 5.0        # njofto kur një monedhë lëviz kaq % nga njoftimi i fundit (0 = i fikur)
 
     def validate(self):
         if self.strategy not in ("breakout", "momentum", "score", "engulf"):
             raise ValueError("strategy duhet të jetë 'breakout', 'momentum', 'score' ose 'engulf'")
+        if self.alert_move_pct < 0:
+            raise ValueError("alert_move_pct duhet të jetë >= 0")
         if self.momentum_days <= 0 or self.momentum_min_pct < 0 or self.momentum_ema < 2 or self.rotate_margin_pct < 0:
             raise ValueError("rregullimet e momentumit duhet të jenë pozitive")
         if not 0 <= self.session_start_hour < self.session_end_hour <= 24:

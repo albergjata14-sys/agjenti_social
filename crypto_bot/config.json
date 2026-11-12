@@ -56,5 +56,11 @@
   "poll_seconds": 60,
   "state_file": "crypto_bot_state.json",
   "log_file": "crypto_bot_decisions.jsonl",
-  "predictions_file": "crypto_bot_predictions.jsonl"
+  "predictions_file": "crypto_bot_predictions.jsonl",
+  "notify_file": "crypto_bot_notifications.jsonl",
+  "alerts_file": "crypto_bot_alerts.json",
+  "notify_telegram": true,
+  "notify_trades": true,
+  "notify_signals": true,
+  "alert_move_pct": 5.0
 }

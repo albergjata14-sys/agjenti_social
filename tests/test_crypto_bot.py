@@ -796,3 +796,91 @@ def test_bot_active_mode_follows_market(tmp_path):
     acts = run_cycle(exchange(up), Broker(cfg2), cfg2)
     assert [(a[0], a[1]) for a in acts] == [("BLI", "UP/USDT")]
     assert any("pa shitje short" in e["reason"] for e in read_log(cfg2))
+
+
+def test_live_chart_payload():
+    from crypto_bot.live_chart import chart_payload
+
+    df = candles(trend(300, 100, 0.002))
+    opened = df.index[250] + pd.Timedelta(minutes=20)        # brenda qiririt 250
+    p = chart_payload(df, "BTC/USDT", "1h", 20, levels=[("Hyrja", 101.0, "entry"), ("Pa çmim", None, "level")],
+                      marks=[(opened, "long", "Ti: hyrje long"), (df.index[0] - pd.Timedelta(days=3), "exit", "jashtë")],
+                      change_24h=-3.5)
+    assert len(p["candles"]) == 300 and p["candles"][0][0] == int(df.index[0].timestamp())
+    assert p["candles"][-1][4] == pytest.approx(df["close"].iloc[-1])
+    assert len(p["ema"]) == 300 - 19                                   # mesatarja vetëm pasi ka histori
+    assert p["levels"] == [{"name": "Hyrja", "price": 101.0, "kind": "entry"}]
+    assert p["marks"] == [{"time": int(df.index[250].timestamp()), "kind": "long", "text": "Ti: hyrje long"}]
+    assert p["change_24h"] == -3.5 and p["symbol"] == "BTC/USDT"
+    json.dumps(p)                                                       # duhet të jetë JSON i pastër
+
+
+def test_notifications(tmp_path, monkeypatch):
+    from crypto_bot import notify
+
+    sent = []
+
+    class Resp:
+        ok = True
+
+        def json(self):
+            return {"ok": True}
+
+    monkeypatch.setattr(notify.requests, "post", lambda url, json, timeout: sent.append((url, json)) or Resp())
+    cfg = Config(alert_move_pct=5)
+    # Pa Telegram: njoftimi ruhet vetëm në regjistër.
+    e = notify.emit(cfg, "test", "BTC/USDT", "përshëndetje")
+    assert e["telegram"] is False and not sent and notify.recent(cfg)[0]["text"] == "përshëndetje"
+    # Me Telegram (skedari lokal): dërgohet edhe atje, te biseda e duhur.
+    notify.telegram_save("123:ABC", "999")
+    assert notify.telegram_settings() == ("123:ABC", "999")
+    assert notify.emit(cfg, "test", "BTC/USDT", "tani")["telegram"] is True
+    assert sent[-1][0].endswith("/bot123:ABC/sendMessage") and sent[-1][1]["chat_id"] == "999"
+
+    # Alarmet e çmimit: kontrollohen, dërgohen një herë dhe hiqen.
+    notify.add_alert(cfg, "BTC/USDT", "mbi", 80000)
+    notify.add_alert(cfg, "ETH/USDT", "nen", 2000)
+    with pytest.raises(ValueError):
+        notify.add_alert(cfg, "ETH/USDT", "anash", 1)
+    assert notify.check_price_alerts(cfg, {"BTC/USDT": 79000, "ETH/USDT": 2100}) == []
+    fired = notify.check_price_alerts(cfg, {"BTC/USDT": 80500, "ETH/USDT": 2100})
+    assert len(fired) == 1 and "BTC/USDT u ngjit mbi 80,000" in fired[0]["text"]
+    assert [a["symbol"] for a in notify.load_alerts(cfg)] == ["ETH/USDT"]
+
+    # Sinjalet e reja dhe lëvizjet e mëdha njoftohen një herë.
+    state = {}
+    a = lambda sig, price, t="t1": {"symbol": "SOL/USDT", "signal": sig, "price": price, "time": t, "signal_reason": "arsye"}
+    assert len(notify.check_market(cfg, state, [a("PRIT", 100)])) == 0
+    out = notify.check_market(cfg, state, [a("BLI", 101, "t2")])
+    assert len(out) == 1 and "sinjal blerjeje te SOL/USDT" in out[0]["text"]
+    assert notify.check_market(cfg, state, [a("BLI", 102, "t3")]) == []            # i njëjti sinjal nuk përsëritet
+    move = notify.check_market(cfg, state, [a("BLI", 106, "t4")])
+    assert len(move) == 1 and "+6.0%" in move[0]["text"]
+    assert notify.check_market(cfg, state, [a("BLI", 107, "t5")]) == []            # baza u rivendos te 106
+    assert "Roboti BLEU" in notify.trade_message("BLI", "X", {"entry": 1, "sl": 0.9, "tp": None}, "USDT")
+    assert "Roboti mbylli short" in notify.trade_message(
+        "SHIT", "X", {"side": "short", "exit": 1, "pnl": 2, "pnl_pct": 3, "reason": "sinjal"}, "USDT")
+
+
+def test_bot_sends_trade_notifications(tmp_path):
+    from crypto_bot import notify
+
+    cfg = Config(symbols=["BTC/USDT"], candles=300, strategy="score", max_daily_loss_pct=0, market_filter_symbol="",
+                 daily_trend_ema=0, state_file=str(tmp_path / "s.json"), log_file="")
+    ex = make_fake({"BTC/USDT": trend(400, 100, 0.002)})
+    run_cycle(ex, Broker(cfg), cfg)
+    texts = [e["text"] for e in notify.recent(cfg)]
+    assert any("Roboti BLEU BTC/USDT" in t for t in texts) and any("sinjal blerjeje" in t for t in texts)
+
+
+def test_market_overview():
+    from crypto_bot.outlook import overview
+
+    ex = make_fake({"UP/USDT": trend(700, 100, 0.004), "DN/USDT": trend(700, 100, -0.004)})
+    ex.parse_timeframe = lambda tf: 14400        # qirinjtë e rremë trajtohen si 4-orësh
+    df = overview(ex, Config(), ["UP/USDT", "DN/USDT", "NUK/USDT"], tickers={"UP/USDT": {"last": 5.0, "percentage": 1.5}})
+    assert list(df["Monedha"]) == ["UP/USDT", "DN/USDT"]                # e renditur sipas lëvizjes 14-ditore
+    up, dn = df.iloc[0], df.iloc[1]
+    assert up["Çmimi"] == 5.0 and up["24 orë %"] == 1.5                 # nga ticker-i kur ka
+    assert up["Gjendja"].startswith("rritje") and dn["Gjendja"].startswith("rënie")
+    assert 0 <= up["Gjasat lart 24h %"] <= 100 and up["Raste"] > 0
