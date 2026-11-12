@@ -24,11 +24,8 @@ I njëjti panel gjendet edhe te `app.py`, si zgjedhja "Crypto Trading Agent".
 - **Tregu** – monedhat më të tregtuara, të renditura sipas afërsisë me sinjalin e blerjes.
 - **Prova** – prova në të kaluarën dhe ditari i parashikimeve.
 
-Dy mënyra: **E kujdesshme** (parazgjedhja: pak tregti, vetëm në trend rritës) dhe **Demonstrim (aktiv)**
-(qirinj 1-orësh, fitim 3%, stop 1%, pa filtra), që hap shumë tregti për ta parë robotin në veprim.
-Te "Rregullime" vendosen stop-loss dhe fitimi në përqindje. Në provat mbi të dhëna reale (4 monedha,
-15m dhe 1h, 10 muaj) asnjë nga 60 kombinimet me fitime të vogla nuk doli me fitim, ndaj mënyra e
-demonstrimit është vetëm për para demo.
+Dy mënyra: **Aktive (lart dhe poshtë)** dhe **E kujdesshme** (pak tregti, vetëm blerje në thyerje maje
+kur tregu është në ngritje). Te "Rregullime" vendosen stop-loss dhe fitimi në përqindje.
 
 Roboti i nisur nga paneli vazhdon të punojë edhe kur mbyllet faqja; ndalet me butonin Ndalo.
 
@@ -49,6 +46,8 @@ python -m crypto_bot backtest --strategjia score --fitim 4 --humbje 2   # strate
 python -m crypto_bot portofol --candles 5000      # si do të kishte dalë roboti mbi shumë monedha njëherësh
 python -m crypto_bot nis                          # roboti punon vetë, në SIMULIM (para virtuale)
 python -m crypto_bot nis --gjithe-tregun          # njësoj, por zgjedh nga gjithë tregu
+python -m crypto_bot nis --aktiv                   # mënyra aktive: lart ose poshtë, gjithë tregu, me këmbim
+python -m crypto_bot portofol --aktiv --candles 5000   # prova e mënyrës aktive në të kaluarën
 python -m crypto_bot nis --live                   # PARA REALE (kërkon konfirmim dhe çelësa API)
 python -m crypto_bot analizo --exchange binance   # e njëjta gjë në platformë tjetër: mexc, binance, bybit, mt5
 ```
@@ -101,6 +100,24 @@ mbyllet nën fundin e 55 qirinjve, nën EMA200 dhe me trend ditor rënës; e mby
 majën e 20 qirinjve ose kur preket stop-loss (që është sipër hyrjes). Punon në simulim në çdo platformë
 dhe me urdhra në MT5; tregu spot i MEXC, Binance dhe Bybit nuk e lejon me urdhra realë.
 
+### Mënyra aktive (`--aktiv`, strategjia `momentum`)
+
+Roboti mat lëvizjen e 14 ditëve të fundit për çdo monedhë të skanuar dhe hyn te më të fortat:
+
+- **lart (blerje)** kur lëvizja është mbi +5%, çmimi mbi mesataren 100 dhe BTC në trend ditor rritës;
+- **poshtë (short)** kur lëvizja është nën −5%, çmimi nën mesataren 100 dhe BTC në trend ditor rënës;
+- **dalje** kur lëvizja e monedhës kthehet në anën tjetër, ose te stop-loss;
+- **këmbim**: kur të 8 vendet janë plot dhe një monedhë tjetër lëviz të paktën 10 pikë më fort se
+  pozicioni më i dobët, ai mbyllet dhe hapet e reja.
+
+Shitja short punon në simulim dhe në MT5; në tregun spot me urdhra realë roboti bën vetëm blerjet.
+
+Prova mbi 20 monedha (4h, shtator 2024 – nëntor 2026): +72%, rënia maksimale 30%, gjysmat +44% / +20%,
+16 muaj me fitim dhe 10 me humbje, 803 tregti. Blerjet dhanë +833 USDT, short-et −207 USDT: short-et
+vetë dolën me humbje në çdo variant të provuar, edhe kur hapeshin vetëm me BTC në rënie. Pa rregullin e
+drejtimit sipas BTC, gjysma e dytë doli −25%. Variante të tjera të provuara dhe të hedhura poshtë:
+lëvizje 3-ditore (−33%), 30-ditore (rreth zeros), dhe 60 kombinime me fitime të vogla (të gjitha me humbje).
+
 ### Prova e portofolit dhe çfarë thonë studimet
 
 Roboti nuk tregton një monedhë të vetme: skanon tregun dhe mban disa pozicione njëherësh. Komanda
@@ -109,7 +126,8 @@ tregtuara të MEXC me histori të plotë (4h, shtator 2024 – nëntor 2026, kom
 
 | Rregullimi | Totali | Rënia maks. | Gjysma 1 / 2 | Muaj me fitim / zero / humbje |
 |---|---|---|---|---|
-| I ri: 8 pozicione, rrezik 0.5%, filtër BTC, 20 monedha | +52% | 17% | +44% / +6% | 9 / 5 / 12 |
+| I kujdesshëm: 8 pozicione, rrezik 0.5%, filtër BTC, 20 monedha | +51% | 17% | +44% / +5% | 9 / 5 / 12 |
+| Aktiv: lart/poshtë sipas BTC, me këmbim, 20 monedha | +72% | 30% | +44% / +20% | 16 / 0 / 10 |
 | I vjetër: 3 pozicione, rrezik 1%, pa filtër, 30 monedha | +9% | 27% | +12% / −3% | 9 / 0 / 17 |
 
 Tre gjëra dolën të qëndrueshme në të gjitha kombinimet e provuara dhe përputhen me studimet:

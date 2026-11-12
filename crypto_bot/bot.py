@@ -81,6 +81,27 @@ def market_trend_up(exchange, cfg):
         return None
 
 
+def _rotate(broker, cfg, a, by_symbol, prices, actions) -> bool:
+    """Këmbim mes monedhave: kur vendet janë plot, mbyll pozicionin më të dobët nëse sinjali i ri është
+    dukshëm më i fortë (të paktën `rotate_margin_pct` pikë). Kthen True kur u lirua një vend."""
+    if not (cfg.rotate and cfg.strategy == "momentum"):
+        return False
+
+    def lean(sym):   # sa fort po lëviz monedha në drejtimin e pozicionit të mbajtur
+        m = by_symbol.get(sym, {}).get("momentum")
+        return None if m is None else broker.positions[sym].get("side", 1) * m
+
+    held = {s: lean(s) for s in broker.positions if lean(s) is not None}
+    if not held:
+        return False
+    weak = min(held, key=held.get)
+    if a["strength"] <= held[weak] + cfg.rotate_margin_pct:
+        return False
+    _sell(broker, cfg, weak, prices.get(weak, by_symbol[weak]["price"]),
+          f"këmbim me {a['symbol']} (më e fortë: {a['strength']:.1f}% kundrejt {held[weak]:.1f}%)", actions)
+    return True
+
+
 def _sell(broker, cfg, sym, price, reason, actions, score=None):
     t = broker.sell(sym, price, reason)
     actions.append(("SHIT", sym, t))
@@ -126,7 +147,8 @@ def run_cycle(exchange, broker, cfg) -> list:
 
     # 4) Hap pozicione të reja. Çdo vendim regjistrohet një herë për çdo qiri të ri.
     seen, entered = st.setdefault("last_logged", {}), st.setdefault("last_entry_signal", {})
-    for a in results:
+    by_symbol = {a["symbol"]: a for a in results}
+    for a in sorted(results, key=lambda a: -a["strength"]):      # sinjalet më të forta të parat
         sym, new_candle = a["symbol"], seen.get(a["symbol"]) != a["time"]
         seen[sym] = a["time"]
         skip = None
@@ -140,9 +162,11 @@ def run_cycle(exchange, broker, cfg) -> list:
             skip = halted
         elif a["signal"] == "BLI" and market_up is False:
             skip = f"tregu i përgjithshëm ({cfg.market_filter_symbol}) nuk është në trend ditor rritës"
+        elif a["signal"] == "SHORT" and market_up is True:
+            skip = f"tregu i përgjithshëm ({cfg.market_filter_symbol}) është në ngritje: pa shitje short"
         elif cfg.max_trades_per_day and st.get("entries_today", 0) >= cfg.max_trades_per_day:
             skip = f"numri maksimal i hyrjeve në ditë ({cfg.max_trades_per_day})"
-        elif len(broker.positions) >= cfg.max_open_positions:
+        elif len(broker.positions) >= cfg.max_open_positions and not _rotate(broker, cfg, a, by_symbol, prices, actions):
             skip = f"numri maksimal i pozicioneve ({cfg.max_open_positions})"
         elif cfg.max_spread_pct and (spread := spread_pct(exchange, sym) or 0) > cfg.max_spread_pct:
             skip = f"diferenca blerje/shitje shumë e madhe ({spread:.2f}% > {cfg.max_spread_pct:g}%)"

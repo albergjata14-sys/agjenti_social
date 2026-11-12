@@ -720,3 +720,79 @@ def test_market_filter_and_portfolio(tmp_path):
     pm = Config(strategy="score", daily_trend_ema=3, max_open_positions=2)
     blocked = portfolio_backtest({k: (v[0], None) for k, v in frames.items()}, pm, market=(candles(down), None))
     assert blocked["trades"] == 0
+
+
+def test_momentum_strategy_and_rotation(tmp_path):
+    from crypto_bot.backtest import portfolio_backtest
+    from crypto_bot.bot import _rotate
+    from crypto_bot.config import ACTIVE
+
+    cfg = Config(strategy="momentum", allow_short=True, momentum_days=2, momentum_min_pct=5, momentum_ema=20,
+                 daily_trend_ema=0, market_filter_symbol="", fee_pct=0)
+    up, down, flat = candles(trend(400, 100, 0.003)), candles(trend(400, 100, -0.003)), candles(np.full(400, 100.0))
+    a_up, a_dn, a_flat = (analyze(d, cfg, "X") for d in (up, down, flat))
+    # Lëvizja 2-ditore (48 qirinj orarë) vendos drejtimin: lart, poshtë ose asgjë.
+    assert a_up["signal"] == "BLI" and a_up["momentum"] > 5 and a_up["side"] == 1
+    assert a_dn["signal"] == "SHORT" and a_dn["momentum"] < -5 and a_dn["side"] == -1
+    assert a_flat["signal"] == "PRIT" and abs(a_flat["momentum"]) < 1e-9
+    assert a_up["strength"] == pytest.approx(a_up["momentum"]) and a_dn["strength"] == pytest.approx(-a_dn["momentum"])
+    assert "lëvizja 2-ditore" in a_up["signal_reason"]
+    s = signal_frame(up, cfg)
+    assert s["momentum"].iloc[-1] == pytest.approx((up["close"].iloc[-1] / up["close"].iloc[-49] - 1) * 100)
+    assert not signal_frame(down, Config(strategy="momentum", momentum_days=2, daily_trend_ema=0))["short"].any()
+
+    # Këmbimi: me vendet plot, pozicioni më i dobët i lë vendin një monedhe dukshëm më të fortë.
+    bc = Config(**{**cfg.__dict__, "state_file": str(tmp_path / "s.json"), "log_file": "", "max_open_positions": 2})
+    b = Broker(bc)
+    b.buy("A/USDT", 100.0, 1000.0)
+    b.buy("B/USDT", 100.0, 1000.0, side=-1)
+    held = {"A/USDT": {"momentum": 6.0, "price": 101.0}, "B/USDT": {"momentum": -30.0, "price": 99.0}}
+    acts = []
+    assert not _rotate(b, bc, {"symbol": "C/USDT", "strength": 12.0}, held, {}, acts)        # jo mjaft më e fortë
+    assert _rotate(b, bc, {"symbol": "C/USDT", "strength": 25.0}, held, {}, acts)            # 25 > 6 + 10
+    assert list(b.positions) == ["B/USDT"] and "këmbim me C/USDT" in acts[0][2]["reason"]
+    assert not _rotate(b, Config(**{**bc.__dict__, "rotate": False}), {"symbol": "D", "strength": 99.0}, held, {}, acts)
+
+    # Drejtimi sipas tregut: me tregun në ngritje nuk hapen short-e, me tregun në rënie nuk hapen blerje.
+    frames = {"UP/USDT": (up, None), "DN/USDT": (down, None)}
+    pc = Config(**{**cfg.__dict__, "daily_trend_ema": 3, "market_filter_symbol": "BTC/USDT"})
+    rising = portfolio_backtest(frames, pc, market=(up, None))
+    falling = portfolio_backtest(frames, pc, market=(down, None))
+    assert {t["side"] for t in rising["trade_list"]} <= {"long"} and rising["short_pnl"] == 0
+    assert {t["side"] for t in falling["trade_list"]} <= {"short"} and falling["long_pnl"] == 0
+    assert rising["end"] > rising["start"] and falling["end"] > falling["start"]
+    both = portfolio_backtest(frames, Config(**{**cfg.__dict__}))
+    assert both["end"] > max(rising["end"], falling["end"])            # pa filtër fiton në të dy anët
+    assert ACTIVE["strategy"] == "momentum" and ACTIVE["allow_short"]
+
+
+def test_bot_active_mode_follows_market(tmp_path):
+    """Me BTC në rënie, roboti aktiv hap short te monedha që bie dhe nuk blen atë që ngjitet."""
+    up, down = trend(400, 100, 0.003), trend(400, 100, -0.003)
+    cfg = Config(strategy="momentum", allow_short=True, momentum_days=2, momentum_ema=20, candles=300,
+                 symbols=["UP/USDT", "DN/USDT"], daily_trend_ema=3, market_filter_symbol="BTC/USDT",
+                 state_file=str(tmp_path / "s.json"), log_file=str(tmp_path / "d.jsonl"))
+
+    class DailyFake(FakeExchange):
+        def parse_timeframe(self, tf):
+            return 86400 if tf == "1d" else 3600
+
+        def fetch_ohlcv(self, symbol, timeframe, since=None, limit=None):
+            if timeframe != "1d":
+                return super().fetch_ohlcv(symbol, timeframe, since, limit)
+            d = self.data[symbol].resample("1D").agg({"open": "first", "high": "max", "low": "min",
+                                                      "close": "last", "volume": "sum"}).dropna()
+            return [[int(t.timestamp() * 1000), *v] for t, v in zip(d.index, d.to_numpy().tolist())]
+
+    def exchange(btc):
+        base = make_fake({"UP/USDT": up, "DN/USDT": down, "BTC/USDT": btc})
+        return DailyFake(base.data, base.now)
+
+    acts = run_cycle(exchange(down), Broker(cfg), cfg)
+    assert [(a[0], a[1]) for a in acts] == [("SHORT", "DN/USDT")]
+    assert any("pa" not in e["reason"] and e["action"] == "ANASHKALO" and "trend ditor rritës" in e["reason"]
+               for e in read_log(cfg))
+    cfg2 = Config(**{**cfg.__dict__, "state_file": str(tmp_path / "s2.json"), "log_file": str(tmp_path / "d2.jsonl")})
+    acts = run_cycle(exchange(up), Broker(cfg2), cfg2)
+    assert [(a[0], a[1]) for a in acts] == [("BLI", "UP/USDT")]
+    assert any("pa shitje short" in e["reason"] for e in read_log(cfg2))

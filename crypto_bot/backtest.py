@@ -115,8 +115,9 @@ def portfolio_backtest(frames: dict, cfg, market=None) -> dict:
     """Simulon robotin mbi shumë monedha me kapital të përbashkët, ashtu siç punon realisht.
 
     `frames`: {simboli: (qirinjtë, qirinjtë ditorë)}; `market`: (qirinjtë, ditorët) e tregut të filtrit
-    (p.sh. BTC) ose None. Vetëm blerje (long). Rregullat: deri në `max_open_positions` pozicione, madhësia
-    sipas rrezikut, hyrje në hapjen e qiririt pas sinjalit, më të mirat sipas pikëve të parat.
+    (p.sh. BTC) ose None. Rregullat e robotit: deri në `max_open_positions` pozicione, madhësia sipas
+    rrezikut, hyrje në hapjen e qiririt pas sinjalit, më të fortat të parat; blerje vetëm kur tregu është
+    në ngritje dhe short vetëm kur është në rënie; këmbim i pozicionit më të dobët kur vendet janë plot.
     """
     import pandas as pd
 
@@ -125,45 +126,69 @@ def portfolio_backtest(frames: dict, cfg, market=None) -> dict:
     syms = list(frames)
     idx = max((frames[k][0].index for k in syms), key=len)
     sig = {k: signal_frame(df, cfg, daily).reindex(idx) for k, (df, daily) in frames.items()}
-    col = lambda name, kind=float: np.column_stack([sig[k][name].to_numpy(kind) for k in syms])
+    col = lambda name: np.column_stack([sig[k][name].to_numpy(float) for k in syms])
+    flag = lambda name: np.column_stack([sig[k][name].fillna(False).to_numpy(bool) for k in syms])
     o, h, l, c, score, atr = (col(n) for n in ["open", "high", "low", "close", "score", "atr"])
-    buy = np.column_stack([sig[k]["buy"].fillna(False).to_numpy(bool) for k in syms])
-    sell = np.column_stack([sig[k]["sell"].fillna(False).to_numpy(bool) for k in syms])
-    up = np.ones(len(idx), bool)
-    if market is not None and cfg.market_filter_symbol:
+    buy, sell, short, cover = (flag(n) for n in ["buy", "sell", "short", "cover"])
+    lean = col("momentum") if cfg.strategy == "momentum" else score     # pozitiv = lart, negativ = poshtë
+    up = down = np.ones(len(idx), bool)
+    if market is not None and cfg.market_filter_symbol and cfg.daily_trend_ema:
         up = daily_trend(market[0], cfg, market[1]).reindex(idx).fillna(False).to_numpy(bool)
-    fee, cash, pos, trades, equity = cfg.fee_pct / 100, float(cfg.paper_balance), {}, [], []
+        down = daily_trend(market[0], cfg, market[1], down=True).reindex(idx).fillna(False).to_numpy(bool)
+    fee, cash, pos, trades, equity, swaps = cfg.fee_pct / 100, float(cfg.paper_balance), {}, [], [], 0
     start = warmup(cfg) + 1
+
+    def value(p, price):
+        return p["qty"] * (price if p["side"] > 0 else 2 * p["entry"] - price)
 
     def close(j, i, price, reason):
         nonlocal cash
         p = pos.pop(j)
-        got = p["qty"] * price * (1 - fee)
+        got = max(value(p, price) - p["qty"] * price * fee, 0.0)
         cash += got
-        trades.append({"symbol": syms[j], "entry_time": str(idx[p["i"]]), "exit_time": str(idx[i]), "entry": p["entry"],
-                       "exit": price, "reason": reason, "pnl": got - p["cost"], "pnl_pct": (got / p["cost"] - 1) * 100})
+        trades.append({"symbol": syms[j], "side": "long" if p["side"] > 0 else "short", "entry_time": str(idx[p["i"]]),
+                       "exit_time": str(idx[i]), "entry": p["entry"], "exit": price, "reason": reason,
+                       "pnl": got - p["cost"], "pnl_pct": (got / p["cost"] - 1) * 100})
 
     for i in range(start, len(idx)):
-        for j in [j for j in pos if sell[i - 1, j] and not np.isnan(o[i, j])]:
+        for j in [j for j, p in pos.items() if (sell[i - 1, j] if p["side"] > 0 else cover[i - 1, j])
+                  and not np.isnan(o[i, j])]:
             close(j, i, o[i, j], "sinjal")
-        if len(pos) < cfg.max_open_positions and up[i - 1]:
-            wanted = sorted((j for j in range(len(syms)) if buy[i - 1, j] and j not in pos and not np.isnan(o[i, j])),
-                            key=lambda j: -np.nan_to_num(score[i - 1, j], nan=-999))
-            total = cash + sum(p["qty"] * c[i - 1, j] for j, p in pos.items())
-            for j in wanted[: cfg.max_open_positions - len(pos)]:
-                stop_pct = stop_distance_pct(cfg, o[i, j], atr[i - 1, j])
-                cost = min(position_cost(cfg, total, stop_pct), cash)
-                if cost <= 0:
+        wanted = []
+        for j in range(len(syms)):
+            if j in pos or np.isnan(o[i, j]):
+                continue
+            if buy[i - 1, j] and up[i - 1]:
+                wanted.append((np.nan_to_num(lean[i - 1, j], nan=-999.0), j, 1))
+            elif short[i - 1, j] and down[i - 1]:
+                wanted.append((np.nan_to_num(-lean[i - 1, j], nan=-999.0), j, -1))
+        wanted.sort(reverse=True)
+        total = cash + sum(value(p, c[i - 1, j]) for j, p in pos.items())
+        for strength, j, side in wanted:
+            if len(pos) >= cfg.max_open_positions:
+                if not (cfg.rotate and cfg.strategy == "momentum"):
                     break
-                sl, tp = exit_prices(cfg, o[i, j], stop_pct)
-                pos[j] = {"i": i, "entry": o[i, j], "qty": cost * (1 - fee) / o[i, j], "cost": cost, "sl": sl, "tp": tp}
-                cash -= cost
+                weak = min(pos, key=lambda k: pos[k]["side"] * lean[i - 1, k])
+                if strength > pos[weak]["side"] * lean[i - 1, weak] + cfg.rotate_margin_pct and not np.isnan(o[i, weak]):
+                    close(weak, i, o[i, weak], f"këmbim me {syms[j]}")
+                    swaps += 1
+                else:
+                    break
+            stop_pct = stop_distance_pct(cfg, o[i, j], atr[i - 1, j])
+            cost = min(position_cost(cfg, total, stop_pct), cash)
+            if cost <= 0:
+                break
+            sl, tp = exit_prices(cfg, o[i, j], stop_pct, side)
+            pos[j] = {"i": i, "side": side, "entry": o[i, j], "qty": cost * (1 - fee) / o[i, j], "cost": cost,
+                      "sl": sl, "tp": tp}
+            cash -= cost
         for j in list(pos):     # stop-i kontrollohet i pari: rasti më i keq kur preken të dy brenda një qiriri
-            if l[i, j] <= pos[j]["sl"]:
-                close(j, i, min(o[i, j], pos[j]["sl"]), "stop-loss")
-            elif pos[j]["tp"] and h[i, j] >= pos[j]["tp"]:
-                close(j, i, max(o[i, j], pos[j]["tp"]), "take-profit")
-        equity.append(cash + sum(p["qty"] * (c[i, j] if not np.isnan(c[i, j]) else p["entry"]) for j, p in pos.items()))
+            p, long = pos[j], pos[j]["side"] > 0
+            if (l[i, j] <= p["sl"]) if long else (h[i, j] >= p["sl"]):
+                close(j, i, min(o[i, j], p["sl"]) if long else max(o[i, j], p["sl"]), "stop-loss")
+            elif p["tp"] and ((h[i, j] >= p["tp"]) if long else (l[i, j] <= p["tp"])):
+                close(j, i, max(o[i, j], p["tp"]) if long else min(o[i, j], p["tp"]), "take-profit")
+        equity.append(cash + sum(value(p, c[i, j] if not np.isnan(c[i, j]) else p["entry"]) for j, p in pos.items()))
 
     eq = pd.Series(equity, index=idx[start:])
     monthly = eq.resample("ME").last().pct_change().dropna() * 100
@@ -179,6 +204,8 @@ def portfolio_backtest(frames: dict, cfg, market=None) -> dict:
         "max_drawdown_pct": float(((peak - eq) / peak).max() * 100),
         "buy_hold_pct": float(np.mean(hold) * 100),
         "trades": len(trades), "win_rate_pct": sum(t["pnl"] > 0 for t in trades) / len(trades) * 100 if trades else 0.0,
+        "long_pnl": sum(t["pnl"] for t in trades if t["side"] == "long"),
+        "short_pnl": sum(t["pnl"] for t in trades if t["side"] == "short"), "swaps": swaps,
         "months_up": int((monthly > 0.05).sum()), "months_flat": int((monthly.abs() <= 0.05).sum()),
         "months_down": int((monthly < -0.05).sum()),
         "worst_month_pct": float(monthly.min()) if len(monthly) else 0.0,
@@ -195,7 +222,8 @@ def format_portfolio(r: dict, cfg) -> str:
         f"Gjysma e parë: {r['first_half_pct']:+.1f}% | gjysma e dytë: {r['second_half_pct']:+.1f}%",
         f"Muajt: {r['months_up']} me fitim, {r['months_flat']} rreth zeros, {r['months_down']} me humbje | "
         f"më i miri {r['best_month_pct']:+.1f}%, më i keqi {r['worst_month_pct']:+.1f}%",
-        f"Tregti: {r['trades']} | fituese: {r['win_rate_pct']:.0f}%",
+        f"Tregti: {r['trades']} | fituese: {r['win_rate_pct']:.0f}% | nga blerjet {r['long_pnl']:+.0f}, nga short-et "
+        f"{r['short_pnl']:+.0f} {cfg.quote} | këmbime: {r['swaps']}",
         f"Mbajtja pa tregtuar e të gjitha monedhave (mesatarja): {r['buy_hold_pct']:+.1f}%",
         "Kujdes: monedhat janë zgjedhur sipas volumit të sotëm, pra janë ato që mbijetuan; rezultati real ka gjasa të dalë më i dobët.",
     ])

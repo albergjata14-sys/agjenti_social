@@ -15,22 +15,18 @@ from . import journal
 from .backtest import backtest
 from .bot import is_running, scan, stop_file
 from .broker import Broker
-from .config import load_config
+from .config import ACTIVE, load_config
 from .data import fetch_candles, fetch_daily, make_exchange
 from .strategy import analyze
 
 PLATFORMS = ["mexc", "binance", "bybit", "mt5"]
 TIMEFRAMES = ["15m", "1h", "4h", "1d"]
-STRATEGIES = ["breakout", "score", "engulf"]
+STRATEGIES = ["breakout", "momentum", "score", "engulf"]
 UI_CONFIG = "crypto_bot_ui_config.json"
 REFRESH = 15   # sekonda mes rifreskimeve të grafikut
-# Dy mënyra pune. "Demonstrim" hap shumë më tepër tregti që roboti të shihet në veprim; në provat
-# mbi të dhëna reale kjo mënyrë ka humbur, ndaj është vetëm për para demo.
-MODES = {
-    "E kujdesshme": {},
-    "Demonstrim (aktiv)": {"strategy": "breakout", "timeframe": "1h", "take_profit_pct": 3.0, "stop_loss_pct": 1.0,
-                           "daily_trend_ema": 0, "market_filter_symbol": ""},
-}
+# Dy mënyra pune. Aktive: hyn lart kur tregu (BTC) është në ngritje dhe poshtë kur është në rënie, te
+# monedhat me lëvizjen më të fortë, dhe këmben pozicionet e dobëta. E kujdesshme: vetëm blerje në thyerje maje.
+MODES = {"Aktive (lart dhe poshtë)": ACTIVE, "E kujdesshme": {}}
 # Ngjyra të kontrolluara për shikim me daltonizëm: blu = qiri rritës, portokalli = rënës.
 COLORS = {"light": {"up": "#2a78d6", "down": "#eb6834", "ema": "#6250d6", "ink": "#52514e", "surface": "#fcfcfb"},
           "dark": {"up": "#3987e5", "down": "#d95926", "ema": "#9085e9", "ink": "#c3c2b7", "surface": "#1a1a19"}}
@@ -91,6 +87,11 @@ def _fmt(x) -> str:
     return f"{x:,.6g}"
 
 
+def _ema_n(cfg) -> int:
+    """Mesatarja që përdor strategjia e zgjedhur (dhe që vizatohet në grafik)."""
+    return cfg.momentum_ema if cfg.strategy == "momentum" else cfg.trend_ema
+
+
 def price_chart(live: pd.DataFrame, levels: list, marks: list, cfg, bars: int = 120):
     """Qirinjtë e gjallë me EMA, vijat e niveleve (me etiketë) dhe shenjat e hyrjeve/daljeve.
 
@@ -98,7 +99,8 @@ def price_chart(live: pd.DataFrame, levels: list, marks: list, cfg, bars: int = 
     """
     c = _theme()
     frame = live.copy()
-    frame["trend_ema"] = frame["close"].ewm(span=cfg.trend_ema, adjust=False, min_periods=cfg.trend_ema).mean()
+    n = _ema_n(cfg)
+    frame["trend_ema"] = frame["close"].ewm(span=n, adjust=False, min_periods=n).mean()
     d = frame.tail(bars).reset_index().rename(columns={"time": "koha"})
     d["drejtimi"] = (d["close"] >= d["open"]).map({True: "Qiri rritës", False: "Qiri rënës"})
     tips = [alt.Tooltip("koha:T", title="Koha", format="%d %b %H:%M"),
@@ -123,7 +125,7 @@ def price_chart(live: pd.DataFrame, levels: list, marks: list, cfg, bars: int = 
               base.mark_bar(size=max(2, 480 // bars)).encode(x=x, y="open:Q", y2="close:Q", color=color, tooltip=tips),
               base.mark_line(strokeWidth=2, color=c["ema"]).encode(
                   x=x, y="trend_ema:Q",
-                  tooltip=[alt.Tooltip("trend_ema:Q", title=f"EMA{cfg.trend_ema}", format=",.6~g")])]
+                  tooltip=[alt.Tooltip("trend_ema:Q", title=f"EMA{n}", format=",.6~g")])]
     if len(lv):
         layers.append(alt.Chart(lv).mark_rule(strokeDash=[6, 4], strokeWidth=1.5, color=c["ink"]).encode(
             y="cmimi:Q", tooltip=[alt.Tooltip("niveli:N", title="Niveli"),
@@ -235,12 +237,14 @@ def tab_chart(cfg, exchange, symbol):
         if a["signal"] in ("BLI", "SHORT"):
             levels += [("Stop-loss", a["plan"]["stop_loss"]), ("Fitimi (TP)", a["plan"]["take_profit"])]
         levels = [(n, v) for n, v in levels if v is not None]
-    else:
+    elif cfg.strategy == "breakout":
         levels = [("Blerje mbi", a["buy_above"])] + ([("Short nën", a["short_below"])] if cfg.allow_short else [])
+    else:
+        levels = []
     marks = _marks(state, symbol, "Roboti", _shift(cfg)) + _marks(mb.state, symbol, "Ti", _shift(cfg))
     st.altair_chart(price_chart(live, levels, marks, cfg), width="stretch")
     st.caption(f"Grafiku rifreskohet vetë çdo {REFRESH} sekonda (i fundit: {datetime.now():%H:%M:%S}). "
-               f"Vija e plotë është EMA{cfg.trend_ema}; vijat me ndërprerje janë nivelet. "
+               f"Vija e plotë është EMA{_ema_n(cfg)}; vijat me ndërprerje janë nivelet. "
                "Trekëndëshi lart shënon një hyrje, trekëndëshi poshtë një dalje.")
 
     st.markdown("**Provo vetë me para demo**")
@@ -342,10 +346,18 @@ def tab_scan(cfg, exchange):
     if not rows:
         return st.info(f"Shtyp butonin për të parë {cfg.scan_top_n} monedhat më të tregtuara dhe cilat janë më afër blerjes.")
     order = {"BLI": 0, "SHORT": 1, "PRIT": 2, "SHIT": 3}
-    rows = sorted(rows, key=lambda r: (order[r["signal"]], r["buy_above"] / r["price"]))
     m = st.columns(3)
     m[0].metric("Monedha të skanuara", len(rows))
     m[1].metric("Sinjale blerjeje", sum(r["signal"] == "BLI" for r in rows))
+    if cfg.strategy == "momentum":      # mënyra aktive: renditje sipas forcës së lëvizjes
+        m[2].metric("Sinjale short", sum(r["signal"] == "SHORT" for r in rows))
+        rows = sorted(rows, key=lambda r: (order[r["signal"]], -r["strength"]))
+        st.dataframe(pd.DataFrame([{
+            "Monedha": r["symbol"], "Sinjali": {"SHIT": "DIL"}.get(r["signal"], r["signal"]), "Çmimi": r["price"],
+            f"Lëvizja {cfg.momentum_days:g} ditë %": None if r["momentum"] is None else round(r["momentum"], 1)}
+            for r in rows]), width="stretch", hide_index=True)
+        return st.caption("Roboti hyn te lëvizjet më të forta: blerje kur tregu (BTC) është në ngritje, short kur është në rënie.")
+    rows = sorted(rows, key=lambda r: (order[r["signal"]], r["buy_above"] / r["price"]))
     m[2].metric("Me trend ditor rritës", sum(r["daily_up"] for r in rows))
     st.dataframe(pd.DataFrame([{
         "Monedha": r["symbol"], "Sinjali": {"SHIT": "DIL"}.get(r["signal"], r["signal"]), "Çmimi": r["price"],
@@ -434,12 +446,13 @@ def _settings():
     c = st.columns([1, 1])
     symbol = c[0].text_input("Monedha", base.symbols[0]).strip().upper()
     mode = c[1].radio("Mënyra e robotit", list(MODES), horizontal=True,
-                      help="E kujdesshme: pak tregti, vetëm në trend rritës. Demonstrim: shumë tregti të shpejta me "
-                           "fitim të vogël, që roboti të shihet në veprim; në prova kjo mënyrë ka humbur.")
+                      help="Aktive: hyn lart kur tregu është në ngritje dhe poshtë kur është në rënie, në të gjitha "
+                           "monedhat, dhe këmben pozicionet e dobëta me monedha më të forta. E kujdesshme: pak tregti, "
+                           "vetëm blerje kur tregu është në ngritje.")
     preset = replace(base, **MODES[mode])
     if MODES[mode]:
-        st.warning("Mënyra e demonstrimit është vetëm për para demo: në provat mbi të dhëna reale, asnjë nga 60 "
-                   "kombinimet me fitime të vogla nuk doli me fitim.")
+        st.caption("Mënyra aktive tregton shpesh, në të dy drejtimet. Në prova (20 monedha, 26 muaj) dha +72% me rënie "
+                   "deri në 30%; fitimi erdhi nga blerjet, ndërsa shitjet short vetë dolën me humbje.")
     with st.expander("Rregullime"):
         r = st.columns(2)
         name = r[0].selectbox("Platforma", PLATFORMS, key=f"ex_{mode}",
@@ -453,7 +466,7 @@ def _settings():
                                  help="Me 0 fitimi lihet të rritet derisa trendi të kthehet. Fitimet e vogla e kanë "
                                       "dobësuar rezultatin në prova.")
         strategy = r[0].selectbox("Strategjia", STRATEGIES, key=f"st_{mode}", index=STRATEGIES.index(preset.strategy))
-        short = r[1].toggle("Lejo edhe shitje short", base.allow_short, key=f"sh_{mode}",
+        short = r[1].toggle("Lejo edhe shitje short", preset.allow_short, key=f"sh_{mode}",
                             help="Roboti hap pozicione edhe kur pret rënie. Në prova kjo e ka dobësuar rezultatin.")
     try:
         cfg = replace(preset, exchange=name, symbols=[symbol], timeframe=timeframe, stop_loss_pct=stop,

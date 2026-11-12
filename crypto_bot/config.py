@@ -16,7 +16,13 @@ class Config:
     scan_top_n: int = 20               # sa monedha (sipas volumit) të skanohen
     timeframe: str = "4h"
     candles: int = 500
-    strategy: str = "breakout"         # "breakout" (thyerje maje), "score" (pikët e treguesve) ose "engulf"
+    strategy: str = "breakout"         # "breakout" (thyerje maje), "momentum", "score" ose "engulf"
+    # --- strategjia "momentum": hyrje lart ose poshtë sipas forcës së lëvizjes së ditëve të fundit ---
+    momentum_days: float = 14.0        # mbi sa ditë matet lëvizja
+    momentum_min_pct: float = 5.0      # lëvizja minimale (në %) për të hyrë
+    momentum_ema: int = 100            # çmimi duhet të jetë mbi (long) ose nën (short) këtë mesatare
+    rotate: bool = True                # kur vendet janë plot, këmbe pozicionin më të dobët me një monedhë më të fortë
+    rotate_margin_pct: float = 10.0    # sa më e fortë duhet të jetë monedha e re që të bëhet këmbimi
     breakout_entry: int = 55           # bli kur çmimi mbyllet mbi majën e kaq qirinjve të fundit
     breakout_exit: int = 20            # shit kur çmimi mbyllet nën fundin e kaq qirinjve të fundit
     trend_ema: int = 200               # bli vetëm kur çmimi është mbi këtë mesatare (trend rritës)
@@ -62,8 +68,10 @@ class Config:
     predictions_file: str = "crypto_bot_predictions.jsonl"   # ditari i parashikimeve (komanda `ditar`)
 
     def validate(self):
-        if self.strategy not in ("breakout", "score", "engulf"):
-            raise ValueError("strategy duhet të jetë 'breakout', 'score' ose 'engulf'")
+        if self.strategy not in ("breakout", "momentum", "score", "engulf"):
+            raise ValueError("strategy duhet të jetë 'breakout', 'momentum', 'score' ose 'engulf'")
+        if self.momentum_days <= 0 or self.momentum_min_pct < 0 or self.momentum_ema < 2 or self.rotate_margin_pct < 0:
+            raise ValueError("rregullimet e momentumit duhet të jenë pozitive")
         if not 0 <= self.session_start_hour < self.session_end_hour <= 24:
             raise ValueError("orari i sesionit duhet të jetë 0 <= fillimi < fundi <= 24")
         if self.engulf_max_bars < 1 or self.engulf_swing_strength < 1 or self.engulf_structure_bars < 1:
@@ -89,6 +97,11 @@ class Config:
         if self.max_open_positions < 1:
             raise ValueError("max_open_positions duhet të jetë >= 1")
         return self
+
+
+# Mënyra aktive: hyn lart kur tregu (BTC) është në ngritje dhe poshtë kur është në rënie, te monedhat me
+# lëvizjen më të fortë, dhe këmben pozicionet e dobëta me monedha më të forta. Short vetëm në simulim ose MT5.
+ACTIVE = {"strategy": "momentum", "allow_short": True, "timeframe": "4h", "scan_market": True}
 
 
 def load_config(path=None, **overrides) -> Config:

@@ -5,7 +5,7 @@ from . import journal
 from .backtest import backtest, format_backtest, format_portfolio, portfolio_backtest
 from .bot import run_forever, scan
 from .broker import Broker
-from .config import load_config
+from .config import ACTIVE, load_config
 from .data import connect, fetch_candles, fetch_daily, top_symbols
 from .strategy import format_report
 
@@ -24,7 +24,9 @@ def main(argv=None):
     p.add_argument("--exchange", help="mexc, binance, bybit ose mt5")
     p.add_argument("--testnet", action="store_true", help="rrjeti i testimit i platformës (Binance, Bybit)")
     p.add_argument("--timeframe", help="p.sh. 15m, 1h, 4h, 1d")
-    p.add_argument("--strategjia", dest="strategy", choices=["breakout", "score", "engulf"], help="strategjia")
+    p.add_argument("--strategjia", dest="strategy", choices=["breakout", "momentum", "score", "engulf"], help="strategjia")
+    p.add_argument("--aktiv", action="store_true",
+                   help="mënyra aktive: lart ose poshtë sipas lëvizjes, në gjithë tregun, me këmbim mes monedhave")
     p.add_argument("--fitim", type=float, dest="take_profit_pct", help="take-profit në %% (0 = i fikur)")
     p.add_argument("--humbje", type=float, dest="stop_loss_pct", help="stop-loss në %%")
     p.add_argument("--trailing", type=float, dest="trailing_stop_pct", help="trailing stop në %%")
@@ -34,12 +36,14 @@ def main(argv=None):
     p.add_argument("--live", action="store_true", help="tregto me para reale (kërkon çelësat API)")
     a = p.parse_args(argv)
 
-    cfg = load_config(a.config, exchange=a.exchange, testnet=True if a.testnet else None, timeframe=a.timeframe, candles=a.candles,
-                      strategy=a.strategy, take_profit_pct=a.take_profit_pct, stop_loss_pct=a.stop_loss_pct,
-                      trailing_stop_pct=a.trailing_stop_pct,
-                      symbols=[x.strip() for x in a.symbol.split(",") if x.strip()] if a.symbol else None,
-                      scan_market=True if a.gjithe_tregun else None,
-                      allow_short=True if a.short else None)
+    overrides = dict(exchange=a.exchange, testnet=True if a.testnet else None, timeframe=a.timeframe,
+                     candles=a.candles, strategy=a.strategy, take_profit_pct=a.take_profit_pct,
+                     stop_loss_pct=a.stop_loss_pct, trailing_stop_pct=a.trailing_stop_pct,
+                     symbols=[x.strip() for x in a.symbol.split(",") if x.strip()] if a.symbol else None,
+                     scan_market=True if a.gjithe_tregun else None, allow_short=True if a.short else None)
+    if a.aktiv:     # mënyra aktive plotëson vetëm ato që nuk janë dhënë shprehimisht
+        overrides.update({k: v for k, v in ACTIVE.items() if overrides.get(k) is None})
+    cfg = load_config(a.config, **overrides)
 
     if a.komanda == "nis":
         exchange = connect(cfg, with_keys=a.live)
@@ -102,8 +106,8 @@ def main(argv=None):
             print(f"\nSinjale short: {', '.join(r['symbol'] for r in rows if r['signal'] == 'SHORT') or 'asnjë'}")
         print(f"\n{len(rows)} monedha | sinjale blerjeje: {buys} | trend ditor rritës: {sum(r['daily_up'] for r in rows)}")
     elif a.komanda == "portofol":
-        if cfg.strategy == "engulf" or cfg.allow_short:
-            raise ValueError("prova e portofolit mbështet vetëm blerjet me strategjitë breakout dhe score")
+        if cfg.strategy == "engulf":
+            raise ValueError("prova e portofolit nuk mbështet strategjinë engulf")
         symbols = top_symbols(exchange, cfg.quote, cfg.scan_top_n) if (cfg.scan_market or not a.symbol) else cfg.symbols
         frames = {}
         for sym in symbols:

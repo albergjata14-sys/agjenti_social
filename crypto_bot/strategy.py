@@ -89,6 +89,18 @@ def signal_frame(df: pd.DataFrame, cfg, daily=None) -> pd.DataFrame:
         for col in e:
             s[col] = e[col]
         s["sell"] = s["cover"] = False                # dalja bëhet vetëm me stop ose objektiv
+    elif cfg.strategy == "momentum":
+        # Lëvizja e `momentum_days` ditëve të fundit, në %. Hyrje në drejtimin e saj kur kalon pragun dhe
+        # çmimi është në anën e duhur të mesatares; dalje kur lëvizja kthehet në anën tjetër.
+        step = df.index.to_series().diff().median()
+        bars = max(1, int(round(pd.Timedelta(days=cfg.momentum_days) / step)))
+        m = (c / c.shift(bars) - 1) * 100
+        avg = c.ewm(span=cfg.momentum_ema, adjust=False, min_periods=cfg.momentum_ema).mean()
+        s["momentum"] = m
+        s["buy"] = (m > cfg.momentum_min_pct) & (c > avg)
+        s["sell"] = m < 0
+        s["short"] = (m < -cfg.momentum_min_pct) & (c < avg)
+        s["cover"] = m > 0
     elif cfg.strategy == "breakout":
         s["buy"] = (c > s["breakout_high"]) & (c > s["trend_ema"]) & s["daily_up"]
         s["sell"] = c < s["breakout_low"]
@@ -126,7 +138,14 @@ def analyze(df: pd.DataFrame, cfg, symbol: str = "", horizon: int = 12, daily=No
     score = float(last["score"])
     signal = "BLI" if last["buy"] else "SHORT" if last["short"] else "SHIT" if last["sell"] else "PRIT"
     side = -1 if signal == "SHORT" else 1
-    if cfg.strategy == "engulf":
+    momentum = float(last["momentum"]) if cfg.strategy == "momentum" else None
+    if cfg.strategy == "momentum":
+        days = f"{cfg.momentum_days:g}-ditore"
+        why = ("histori e pamjaftueshme për të matur lëvizjen" if np.isnan(momentum) else
+               f"lëvizja {days} {momentum:+.1f}% dhe çmimi mbi mesataren" if signal == "BLI" else
+               f"lëvizja {days} {momentum:+.1f}% dhe çmimi nën mesataren" if signal == "SHORT" else
+               f"lëvizja {days} {momentum:+.1f}%: nën pragun {cfg.momentum_min_pct:g}% ose në anën e gabuar të mesatares")
+    elif cfg.strategy == "engulf":
         why = last["engulf_note"] or "pa sinjal"
     elif signal == "SHORT":
         why = (f"çmimi theu fundin e {cfg.breakout_entry} qirinjve ({last['short_low']:.6g}) në trend rënës"
@@ -184,6 +203,9 @@ def analyze(df: pd.DataFrame, cfg, symbol: str = "", horizon: int = 12, daily=No
         "daily_up": bool(last["daily_up"]),
         "daily_down": bool(last["daily_down"]),
         "engulf": engulf,
+        "momentum": None if momentum is None or np.isnan(momentum) else momentum,
+        # Forca e sinjalit për renditje dhe këmbim: lëvizja në drejtimin e hyrjes, ose pikët e treguesve.
+        "strength": (abs(momentum) if momentum is not None and not np.isnan(momentum) else abs(score)),
         "exit_long": bool(last["sell"]),      # pozicioni long duhet mbyllur
         "exit_short": bool(last["cover"]),    # pozicioni short duhet mbyllur
         "side": side,
