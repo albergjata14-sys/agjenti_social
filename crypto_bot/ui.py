@@ -11,19 +11,20 @@ import numpy as np
 import pandas as pd
 import streamlit as st
 
-from . import journal, notify
+from . import futures, journal, notify, sentiment
 from .backtest import backtest
 from .bot import is_running, stop_file
 from .broker import Broker
 from .config import ACTIVE, load_config
 from .data import fetch_candles, fetch_daily, make_exchange, top_symbols
 from .live_chart import chart_payload, live_chart
-from .outlook import overview
+from .outlook import _frame_states, overview
 from .strategy import analyze
 
 PLATFORMS = ["mexc", "binance", "bybit", "mt5"]
 TIMEFRAMES = ["15m", "1h", "4h", "1d"]
 CHART_TIMEFRAMES = ["1m", "5m", "15m", "1h", "4h", "1d"]
+MARKETS = ["Futures", "Spot"]
 STRATEGIES = ["breakout", "momentum", "score", "engulf"]
 FAVORITES = ["BTC/USDT", "ETH/USDT", "SOL/USDT", "XRP/USDT", "BNB/USDT", "DOGE/USDT"]
 UI_CONFIG = "crypto_bot_ui_config.json"
@@ -40,6 +41,10 @@ CSS = """
 .cb-tile .p { font-weight: 700; font-size: 16px; font-variant-numeric: tabular-nums; }
 .cb-tile .c { font-size: 12px; font-variant-numeric: tabular-nums; }
 .cb-tile.sel { border-color: currentColor; }
+.cb-chips { display: flex; flex-wrap: wrap; gap: 6px; margin: 2px 0 8px; }
+.cb-chip { border: 1px solid rgba(128, 128, 128, 0.3); border-radius: 8px; padding: 3px 9px; font-size: 13px; }
+.cb-bar { display: flex; height: 8px; border-radius: 4px; overflow: hidden; margin: 4px 0 2px; gap: 2px; }
+.cb-row { display: flex; justify-content: space-between; font-size: 13px; font-variant-numeric: tabular-nums; }
 </style>
 """
 
@@ -62,6 +67,49 @@ def _tickers(name: str) -> dict:
         return _exchange(name).fetch_tickers()
     except Exception:
         return {}
+
+
+@st.cache_data(ttl=REFRESH, show_spinner=False)
+def _fut_candles(symbol: str, timeframe: str, candles: int):
+    return futures.candles(symbol, timeframe, candles)
+
+
+@st.cache_data(ttl=REFRESH, show_spinner=False)
+def _fut_ticker(symbol: str):
+    return futures.ticker(symbol)
+
+
+@st.cache_data(ttl=60, show_spinner=False)
+def _fut_funding(symbol: str):
+    return futures.funding(symbol)
+
+
+@st.cache_data(ttl=10, show_spinner=False)
+def _fut_depth(symbol: str):
+    return futures.depth(symbol, 50)
+
+
+@st.cache_data(ttl=120, show_spinner=False)
+def _fut_all():
+    try:
+        return futures.all_tickers()
+    except Exception:
+        return {}
+
+
+@st.cache_data(ttl=1800, show_spinner=False)
+def _fear_greed():
+    try:
+        return sentiment.fear_greed()
+    except Exception:
+        return None
+
+
+def _safe(fn, *args):
+    try:
+        return fn(*args)
+    except Exception:
+        return None
 
 
 @st.cache_data(ttl=600, show_spinner=False)
@@ -119,8 +167,12 @@ def _change(tickers: dict, symbol: str):
 
 
 # --- pjesët e ndërfaqes ----------------------------------------------------------------------------
-def ticker_strip(tickers: dict, symbols: list, selected: str):
+def ticker_strip(tickers: dict, symbols: list, selected: str, fg=None):
     tiles = []
+    if fg:
+        diff = "" if fg["yesterday"] is None else f" · dje {fg['yesterday']}"
+        tiles.append(f'<div class="cb-tile"><div class="n">Frika &amp; lakmia</div><div class="p">{fg["value"]} / 100</div>'
+                     f'<div class="c">{fg["label"]}{diff}</div></div>')
     for sym in symbols:
         t = tickers.get(sym) or {}
         pct = t.get("percentage")
@@ -129,6 +181,8 @@ def ticker_strip(tickers: dict, symbols: list, selected: str):
                      f'<div class="p">{_fmt(t.get("last"))}</div>'
                      f'<div class="c">{arrow}{"" if pct is None else f"{pct:+.2f}%"}</div></div>')
     st.markdown(CSS + f'<div class="cb-strip">{"".join(tiles)}</div>', unsafe_allow_html=True)
+    if fg:
+        st.caption("Indeksi i frikës dhe lakmisë: [alternative.me](https://alternative.me/crypto/fear-and-greed-index/)")
 
 
 def _status(a, cfg, symbol, price, pos, who):
@@ -186,12 +240,60 @@ def _toast_new(cfg):
         st.session_state["seen_notify"] = seen
 
 
+def _countdown(ms: int) -> str:
+    left = max(0, int(ms / 1000 - time.time()))
+    return f"{left // 3600:02d}:{left % 3600 // 60:02d}:{left % 60:02d}"
+
+
+def _plan(a, cfg, price, atr):
+    """Plani i tregtimit nga sinjali i robotit: zona e hyrjes, stop-loss dhe objektivi.
+
+    Stop-i është ai i strategjisë. Kur strategjia nuk ka objektiv fitimi (e lë fitimin të hapur), objektivi
+    shfaqet si 2 herë rreziku (2R), vetëm si orientim. Kthen None kur nuk ka sinjal hyrjeje.
+    """
+    if a["signal"] not in ("BLI", "SHORT"):
+        return None
+    side = 1 if a["signal"] == "BLI" else -1
+    stop = a["plan"]["stop_loss"]
+    risk = abs(price - stop)
+    take, orient = a["plan"]["take_profit"], False
+    if not take:
+        take, orient = price + side * 2 * risk, True
+    half = 0.25 * (atr if atr and np.isfinite(atr) else risk * 0.1)
+    return {"side": side, "entry_low": price - half, "entry_high": price + half, "stop": stop, "take": take,
+            "orient": orient, "risk_pct": risk / price * 100, "reward_pct": abs(take - price) / price * 100,
+            "rr": abs(take - price) / risk if risk else 0.0, "size_pct": a["plan"]["position_pct"]}
+
+
+def _chips(items):
+    st.markdown('<div class="cb-chips">' + "".join(f'<span class="cb-chip">{t}</span>' for t in items) + "</div>",
+                unsafe_allow_html=True)
+
+
+def _book_bar(buy_pct: float):
+    st.markdown(f'<div class="cb-row"><span>▲ Blerës {buy_pct:.0f}%</span><span>Shitës {100 - buy_pct:.0f}% ▼</span></div>'
+                f'<div class="cb-bar"><div style="width:{buy_pct:.1f}%;background:#2a78d6"></div>'
+                f'<div style="flex:1;background:#eb6834"></div></div>', unsafe_allow_html=True)
+
+
 @st.fragment(run_every=REFRESH)
 def tab_chart(cfg, exchange, symbol):
-    tf = st.segmented_control("Intervali i grafikut", CHART_TIMEFRAMES, key="chart_tf",
-                              default=cfg.timeframe if cfg.timeframe in CHART_TIMEFRAMES else "4h") or cfg.timeframe
-    live = _candles(cfg.exchange, symbol, tf, 500)
-    strat = live if tf == cfg.timeframe else _candles(cfg.exchange, symbol, cfg.timeframe, max(cfg.candles, 400))
+    c = st.columns([1, 2])
+    market = c[0].segmented_control("Tregu", MARKETS, key="chart_market", default="Futures") or "Futures"
+    tf = c[1].segmented_control("Intervali", CHART_TIMEFRAMES, key="chart_tf",
+                                default=cfg.timeframe if cfg.timeframe in CHART_TIMEFRAMES else "4h") or cfg.timeframe
+    fut = market == "Futures" and cfg.exchange == "mexc"
+    live, tick, stats = None, None, {}
+    if fut:
+        try:
+            live = _fut_candles(symbol, tf, 500)
+            tick = _fut_ticker(symbol)
+        except Exception as e:
+            st.caption(f"Kontratat (Futures) nuk u lexuan ({e}); po tregohet tregu Spot.")
+            fut = False
+    if live is None:
+        live = _candles(cfg.exchange, symbol, tf, 500)
+    strat = _candles(cfg.exchange, symbol, cfg.timeframe, max(cfg.candles, 600))
     closed = _closed(strat, cfg)
     daily = _daily(cfg.exchange, symbol, _cfg_json(cfg), closed.index[0], closed.index[-1])
     a = analyze(closed, cfg, symbol, daily=daily)
@@ -213,16 +315,34 @@ def tab_chart(cfg, exchange, symbol):
     pos, who = (robot_pos, "Roboti") if robot_pos else (my_pos, "Ti") if my_pos else (None, "")
     _status(a, cfg, symbol, price, pos, who)
 
+    t24 = tickers.get(symbol, {})
+    change = tick["change_pct"] if tick else _change(tickers, symbol)
+    fund = _safe(_fut_funding, symbol) if fut else None
+    if tick:
+        stats = {"Maja 24h": tick["high"], "Fundi 24h": tick["low"], "Volumi 24h": f"{tick['volume_quote'] / 1e6:,.0f} M",
+                 "Financimi": f"{tick['funding_pct']:+.4f}%" + (f" · {_countdown(fund['next_ms'])}" if fund else ""),
+                 "Kontrata të hapura": (f"{tick['open_interest_quote'] / 1e6:,.0f} M" if tick["open_interest_quote"] else None)}
+    elif t24:
+        stats = {"Maja 24h": t24.get("high"), "Fundi 24h": t24.get("low"),
+                 "Volumi 24h": f"{(t24.get('quoteVolume') or 0) / 1e6:,.0f} M"}
+
+    plan = None if pos else _plan(a, cfg, price, float(closed["close"].diff().abs().tail(14).mean()))
+    zones = []
     if pos:
         levels = [("Hyrja", pos["entry"], "entry"), ("Stop-loss", pos["sl"], "stop")]
         if pos["tp"]:
             levels.append(("Fitimi (TP)", pos["tp"], "target"))
+    elif plan:
+        levels = []
+        near_stop = plan["entry_low"] if plan["side"] > 0 else plan["entry_high"]
+        near_take = plan["entry_high"] if plan["side"] > 0 else plan["entry_low"]
+        zones = [(f"Stop-loss {_fmt(plan['stop'])}", plan["stop"], near_stop, "stop"),
+                 ("Zona e hyrjes", plan["entry_low"], plan["entry_high"], "entry"),
+                 (f"Objektivi {_fmt(plan['take'])}", near_take, plan["take"], "target")]
     elif a["engulf"]:
         e = a["engulf"]
         levels = [("Maja e sesionit", e["session_high"], "level"), ("50% e sesionit", e["session_mid"], "level"),
                   ("Fundi i sesionit", e["session_low"], "level")]
-        if a["signal"] in ("BLI", "SHORT"):
-            levels += [("Stop-loss", a["plan"]["stop_loss"], "stop"), ("Fitimi (TP)", a["plan"]["take_profit"], "target")]
     elif cfg.strategy == "breakout":
         levels = [("Blerje mbi", a["buy_above"], "level")] + (
             [("Short nën", a["short_below"], "level")] if cfg.allow_short else [])
@@ -231,19 +351,65 @@ def tab_chart(cfg, exchange, symbol):
     shift = _shift(cfg)
     marks = _marks(state, symbol, "Roboti", shift) + _marks(mb.state, symbol, "Ti", shift)
     ema_n = cfg.momentum_ema if cfg.strategy == "momentum" else cfg.trend_ema
-    live_chart(chart_payload(live, symbol, tf, ema_n, levels, marks, _change(tickers, symbol), height=430),
-               key="live_chart")
-    st.caption(f"Vija vjollcë është mesatarja EMA{ema_n}. Vijat horizontale janë nivelet; shigjetat shënojnë hyrjet, "
-               "rrathët daljet. Sinjalet llogariten vetëm mbi qirinjtë e mbyllur "
-               f"({cfg.timeframe}); grafiku rifreskohet çdo {REFRESH} sekonda.")
+    title = f"{symbol.replace('/', '')} {'Perpetual' if fut else 'Spot'}"
+    live_chart(chart_payload(live, title, tf, ema_n, levels, marks, change, height=430, zones=zones, stats=stats,
+                             live_symbol=futures.contract(symbol) if fut else None), key="live_chart")
+    st.caption(f"Vija vjollcë: mesatarja EMA{ema_n} e strategjisë; butoni MA shfaq MA5/10/30/60. Shigjetat shënojnë "
+               f"hyrjet, rrathët daljet. Sinjalet llogariten mbi qirinjtë e mbyllur Spot ({cfg.timeframe}).")
+
+    left, right = st.columns([3, 2])
+    with left:
+        with st.container(border=True):
+            if plan:
+                name = "Plani i blerjes (long)" if plan["side"] > 0 else "Plani i shitjes (short)"
+                st.markdown(f"**{name}** · sipas robotit")
+                st.markdown(
+                    f"Zona e hyrjes **{_fmt(plan['entry_low'])} – {_fmt(plan['entry_high'])}**  \n"
+                    f"Fitimi (TP) **{_fmt(plan['take'])}** ({plan['reward_pct']:+.2f}%)"
+                    f"{' · orientues, 2× rreziku' if plan['orient'] else ''}  \n"
+                    f"Stop-loss **{_fmt(plan['stop'])}** (−{plan['risk_pct']:.2f}%) · raporti fitim/rrezik {plan['rr']:.1f}  \n"
+                    f"Madhësia sipas rrezikut: {plan['size_pct']:.3g}% e kapitalit")
+                st.caption(f"Arsyeja: {a['signal_reason']}.")
+                if st.button("Hap në demo me këtë plan", key="plan_demo", disabled=symbol in mb.positions, width="stretch"):
+                    p = mb.buy(symbol, price, mb.equity({symbol: price}), side=plan["side"], stop_price=plan["stop"],
+                               take_price=plan["take"])
+                    if p:
+                        notify.emit(cfg, "tregti", symbol, notify.trade_message("BLI" if plan["side"] > 0 else "SHORT", symbol,
+                                                                                p, cfg.quote).replace("Roboti", "Prova jote"))
+                    st.rerun(scope="fragment")
+            elif pos:
+                st.markdown(f"**Pozicioni i hapur** ({who})")
+                st.markdown(f"Hyrja {_fmt(pos['entry'])} · Stop-loss {_fmt(pos['sl'])}"
+                            + (f" · Fitimi {_fmt(pos['tp'])}" if pos["tp"] else ""))
+            else:
+                st.markdown("**Ende pa plan tregtimi**")
+                st.caption(f"{a['signal_reason']}.")
+    with right:
+        with st.container(border=True):
+            st.markdown("**Gjendja e tregut**")
+            items = []
+            mom, above, _, states, _ = _frame_states(strat if cfg.timeframe == "4h" else _candles(cfg.exchange, symbol, "4h", 600))
+            m14 = a["momentum"] if a.get("momentum") is not None else float(mom.iloc[-1])
+            items.append(f"{'▲' if m14 > 0 else '▼'} 14 ditë {m14:+.1f}%")
+            items.append(f"{'▲ mbi' if above.iloc[-1] else '▼ nën'} mesataren 100")
+            if fund:
+                items.append(f"Financimi {fund['rate_pct']:+.4f}% ({'long-ët paguajnë' if fund['rate_pct'] > 0 else 'short-et paguajnë'})")
+            fg = _fear_greed()
+            if fg:
+                items.append(f"Frika &amp; lakmia {fg['value']} · {fg['label']}")
+            _chips(items)
+            book = _safe(_fut_depth, symbol) if fut else None
+            if book:
+                _book_bar(book["buy_pct"])
+                st.caption("Libri i urdhrave: sasia e urdhrave pranë çmimit. Ndryshon çdo sekondë dhe nuk tregon drejtimin.")
 
     st.markdown("**Provo vetë me para demo**")
     b = st.columns(3)
     for col, label, side in ((b[0], "🟢 Bli", 1), (b[1], "🔻 Shit short", -1)):
         if col.button(label, width="stretch", disabled=symbol in mb.positions, key=f"open{side}"):
-            pos = mb.buy(symbol, price, mb.equity({symbol: price}), cfg.stop_loss_pct, side)
-            if pos:
-                notify.emit(cfg, "tregti", symbol, notify.trade_message("BLI" if side > 0 else "SHORT", symbol, pos,
+            p = mb.buy(symbol, price, mb.equity({symbol: price}), cfg.stop_loss_pct, side)
+            if p:
+                notify.emit(cfg, "tregti", symbol, notify.trade_message("BLI" if side > 0 else "SHORT", symbol, p,
                                                                         cfg.quote).replace("Roboti", "Prova jote"))
             st.rerun(scope="fragment")
     if b[2].button("Mbyll", width="stretch", disabled=symbol not in mb.positions, key="close"):
@@ -254,15 +420,6 @@ def tab_chart(cfg, exchange, symbol):
     st.caption(f"Para demo të tuat: {mb.cash():,.2f} {cfg.quote} të lira · {len(done)} tregti të mbyllura, gjithsej "
                f"{sum(t['pnl'] for t in done):+.2f} {cfg.quote}. Stop-loss {cfg.stop_loss_pct:g}% larg"
                + (f", fitimi {cfg.take_profit_pct:g}% larg." if cfg.take_profit_pct else ", fitimi lihet i hapur."))
-    with st.expander("Më shumë detaje për analizën"):
-        p, f = a["plan"], a["forecast"]
-        st.markdown(
-            f"- Arsyeja e sinjalit: {a['signal_reason']}\n"
-            f"- Plani nëse hyn tani: stop-loss {_fmt(p['stop_loss'])} (−{p['stop_pct']:.3g}%), "
-            f"madhësia {p['position_pct']:.3g}% e kapitalit\n"
-            f"- Brezi i zakonshëm i lëvizjes për {f['horizon_candles']} qirinj: {_fmt(f['low'])} – {_fmt(f['high'])}\n"
-            f"- Mbështetja / rezistenca: {_fmt(a['support'])} / {_fmt(a['resistance'])}\n"
-            f"- Pikët e treguesve: {a['score']:+.0f}/100 ({a['direction']})")
 
 
 def tab_market(cfg, exchange):
@@ -273,6 +430,10 @@ def tab_market(cfg, exchange):
         with st.spinner("Duke parë tregun (deri në një minutë herën e parë)..."):
             symbols = tuple(_top(cfg.exchange, cfg.quote, n)) if cfg.exchange != "mt5" else tuple(cfg.symbols)
             df = _overview(cfg.exchange, _cfg_json(replace(cfg, timeframe="4h") if cfg.timeframe != "4h" else cfg), symbols)
+            fund = _fut_all()
+            if fund and not df.empty:
+                df = df.copy()
+                df.insert(5, "Financimi %", [fund.get(s, {}).get("funding_pct") for s in df["Monedha"]])
     else:
         return st.info("Shtyp butonin për të parë pamjen e tregut.")
     if df.empty:
@@ -288,6 +449,8 @@ def tab_market(cfg, exchange):
             "24 orë %": st.column_config.NumberColumn(format="%+.2f"),
             "7 ditë %": st.column_config.NumberColumn(format="%+.1f"),
             "Lëvizja 14 ditë %": st.column_config.NumberColumn(format="%+.1f"),
+            "Financimi %": st.column_config.NumberColumn(format="%+.4f", help="Norma e financimit të kontratës: pozitive = "
+                                                         "long-ët paguajnë short-et (shumica janë long)."),
             "Gjasat lart 24h %": st.column_config.ProgressColumn(
                 min_value=0, max_value=100, format="%.0f%%",
                 help="Sa herë, në gjendje të ngjashme në të kaluarën, çmimi ishte më lart pas 24 orësh."),
@@ -531,7 +694,7 @@ def _settings(tickers):
 
 @st.fragment(run_every=15)
 def _strip(name, selected):
-    ticker_strip(_tickers(name), FAVORITES, selected)
+    ticker_strip(_tickers(name), FAVORITES, selected, _fear_greed())
 
 
 def render():

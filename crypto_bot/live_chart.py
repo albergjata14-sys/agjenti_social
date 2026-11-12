@@ -12,11 +12,20 @@ _component = None
 
 
 def chart_payload(df: pd.DataFrame, symbol: str, timeframe: str, ema_span: int = 0, levels=(), marks=(),
-                  change_24h=None, height: int = 440) -> dict:
-    """Të dhënat e grafikut në formë JSON. `marks`: [(koha, lloji, teksti)], lloji: long / short / exit."""
+                  change_24h=None, height: int = 440, zones=(), stats=None, live_symbol=None) -> dict:
+    """Të dhënat e grafikut në formë JSON.
+
+    marks: [(koha, lloji, teksti)], lloji long / short / exit. zones: [(emri, çmimi1, çmimi2, lloji)], lloji
+    entry / stop / target. stats: {emri: vlera} për rreshtin sipër grafikut. live_symbol: kontrata e MEXC
+    (p.sh. "BTC_USDT") për çmimin e gjallë çdo sekondë; None = pa lidhje të gjallë.
+    """
     t = df.index.as_unit("s").asi8.astype(np.int64)
     rows = np.column_stack([t, df[["open", "high", "low", "close", "volume"]].to_numpy(float)])
-    payload = {"symbol": symbol, "timeframe": timeframe, "height": int(height),
+    step = int(np.median(np.diff(t))) if len(t) > 1 else 0
+    payload = {"symbol": symbol, "timeframe": timeframe, "height": int(height), "step": step,
+               "live_symbol": live_symbol, "stats": stats or {},
+               "zones": [{"label": n, "top": float(max(a, b)), "bottom": float(min(a, b)), "kind": k}
+                         for n, a, b, k in zones if a is not None and b is not None],
                "candles": [[int(r[0]), *map(float, r[1:])] for r in rows],
                "change_24h": None if change_24h is None or np.isnan(change_24h) else float(change_24h)}
     if ema_span:

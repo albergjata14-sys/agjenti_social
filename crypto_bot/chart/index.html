@@ -17,7 +17,19 @@
   button { font: inherit; font-size: 13px; color: var(--ink); background: var(--btn); border: 1px solid var(--line);
            border-radius: 8px; padding: 4px 10px; cursor: pointer; min-height: 30px; }
   button:hover { border-color: var(--muted); }
-  #chart { width: 100%; position: relative; }
+  #wrap { width: 100%; position: relative; }
+  #chart { width: 100%; }
+  #zones { position: absolute; inset: 0; pointer-events: none; overflow: hidden; z-index: 5; }
+  .zone { position: absolute; border-top: 1px solid; border-bottom: 1px solid; box-sizing: border-box; }
+  .zone span { position: absolute; left: 6px; top: 50%; transform: translateY(-50%); font-size: 12px; font-weight: 600;
+               white-space: nowrap; padding: 0 4px; border-radius: 4px; background: var(--bg); }
+  .mas { display: flex; flex-wrap: wrap; gap: 4px 12px; font-size: 12px; padding: 0 2px 4px; font-variant-numeric: tabular-nums; }
+  .mas b { font-weight: 600; }
+  .stats { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 12px; color: var(--muted); padding: 0 2px 4px; }
+  .stats b { color: var(--ink); font-weight: 600; font-variant-numeric: tabular-nums; }
+  .live { font-size: 12px; color: var(--muted); }
+  .live.on::before { content: "● "; color: #eb6834; }
+  button.on { border-color: var(--ink); }
   .foot { display: flex; justify-content: space-between; gap: 8px; font-size: 11px; color: var(--muted); padding: 4px 2px 0; }
   .foot a { color: var(--muted); }
 </style>
@@ -27,13 +39,17 @@
     <span class="sym" id="sym">–</span><span class="tf" id="tf"></span>
     <span class="px" id="px"></span><span class="chg" id="chg"></span>
     <span class="ohlc" id="ohlc">Prek grafikun për të parë një qiri.</span>
+    <span class="live" id="live"></span>
     <span class="tools">
+      <button id="ma" title="Shfaq ose fshih mesataret MA5, MA10, MA30, MA60">MA</button>
       <button id="fit" title="Shfaq të gjithë historinë">↔ E gjitha</button>
       <button id="now" title="Kthehu te qiriri i fundit">⟲ Tani</button>
       <button id="big" title="Zmadho ose zvogëlo grafikun">⤢ Zmadho</button>
     </span>
   </div>
-  <div id="chart"></div>
+  <div class="stats" id="stats"></div>
+  <div class="mas" id="mas"></div>
+  <div id="wrap"><div id="chart"></div><div id="zones"></div></div>
   <div class="foot">
     <span>Zmadho me rrotën e miut ose me dy gishta · lëviz duke tërhequr · ora jote lokale</span>
     <span>Grafiku: <a href="https://www.tradingview.com/" target="_blank" rel="noopener">TradingView Lightweight Charts™</a></span>
@@ -47,7 +63,9 @@ let chart = null, candles, volume, ema, lines = [], key = null, lastTime = null,
 const $ = (id) => document.getElementById(id);
 const tzOffset = -new Date().getTimezoneOffset() * 60;           // sekonda: koha UTC → ora lokale e shikuesit
 const fmt = (v, p) => v == null ? "–" : Number(v).toLocaleString("sq-AL", { minimumFractionDigits: p, maximumFractionDigits: p });
-let precision = 2;
+let candleLast = 0, volumeLast = 0;   // koha e qiririt të fundit në çdo seri (përditësimet s'mund të shkojnë mbrapa)
+let precision = 2, maOn = false, maSeries = [], zonesData = [], step = 0, ws = null, wsKey = null, lastBar = null;
+const MA = [5, 10, 30, 60];
 
 function colors(theme) {
   const dark = theme && theme.base === "dark";
@@ -56,7 +74,8 @@ function colors(theme) {
   // Blu = rritje, portokalli = rënie: dallohen edhe nga kush nuk i dallon jeshilen nga e kuqja.
   return { dark, bg, ink, up: dark ? "#3987e5" : "#2a78d6", down: dark ? "#d95926" : "#eb6834",
            ema: dark ? "#9085e9" : "#6250d6", grid: dark ? "rgba(250,250,250,0.06)" : "rgba(49,51,63,0.06)",
-           muted: dark ? "#a3a8b8" : "#6b6d76", line: dark ? "rgba(250,250,250,0.16)" : "rgba(49,51,63,0.14)" };
+           muted: dark ? "#a3a8b8" : "#6b6d76", line: dark ? "rgba(250,250,250,0.16)" : "rgba(49,51,63,0.14)",
+           ma: dark ? ["#199e70", "#c98500", "#d55181", "#9085e9"] : ["#1baf7a", "#eda100", "#e87ba4", "#6250d6"] };
 }
 
 function setHeight() {
@@ -86,6 +105,11 @@ function build() {
     const ch = bar.open ? (bar.close / bar.open - 1) * 100 : 0;
     $("ohlc").textContent = `Hapja ${fmt(bar.open, precision)} · Maja ${fmt(bar.high, precision)} · Fundi ${fmt(bar.low, precision)} · Mbyllja ${fmt(bar.close, precision)} (${ch >= 0 ? "+" : ""}${ch.toFixed(2)}%)`;
   });
+  maSeries = MA.map(() => chart.addLineSeries({ lineWidth: 1, lastValueVisible: false, priceLineVisible: false,
+                                                 crosshairMarkerVisible: false, visible: false }));
+  $("ma").onclick = () => { maOn = !maOn; $("ma").classList.toggle("on", maOn); maSeries.forEach((s) => s.applyOptions({ visible: maOn })); drawMaLegend(); };
+  const loop = () => { drawZones(); requestAnimationFrame(loop); };
+  requestAnimationFrame(loop);
   $("fit").onclick = () => chart.timeScale().fitContent();
   $("now").onclick = () => chart.timeScale().scrollToRealTime();
   $("big").onclick = () => { big = !big; $("big").textContent = big ? "⤡ Zvogëlo" : "⤢ Zmadho"; setHeight(); };
@@ -117,19 +141,35 @@ function render(args, theme) {
   const newKey = args.symbol + "|" + args.timeframe;
   if (newKey !== key || lastTime == null || bars[0].time > lastTime) {
     candles.setData(bars); volume.setData(vols); ema.setData(avg);
+    candleLast = volumeLast = bars[bars.length - 1].time;
+    lastBar = null;
     const n = bars.length;
     // Sa qirinj shfaqen fillimisht varet nga gjerësia: në telefon më pak, që të dallohen.
     const show = Math.max(40, Math.min(140, Math.floor(($("chart").clientWidth || 600) / 9)));
-    chart.timeScale().setVisibleLogicalRange({ from: Math.max(0, n - show), to: n + 4 });
+    chart.timeScale().setVisibleLogicalRange({ from: Math.max(0, n - show), to: n + ((args.zones || []).length ? 22 : 4) });
     key = newKey;
   } else {
     // Vetëm qirinjtë e rinj ose ai që po lëviz: zmadhimi dhe pozicioni i grafikut ruhen.
     for (let i = 0; i < bars.length; i++) {
-      if (bars[i].time >= lastTime) { candles.update(bars[i]); volume.update(vols[i]); }
+      if (bars[i].time >= candleLast) { candles.update(bars[i]); candleLast = bars[i].time; }
+      if (vols[i].time >= volumeLast) { volume.update(vols[i]); volumeLast = vols[i].time; }
     }
     if (avg.length) ema.setData(avg);
   }
-  lastTime = bars[bars.length - 1].time;
+  lastTime = Math.max(bars[bars.length - 1].time, candleLast);
+  if (!lastBar || bars[bars.length - 1].time >= lastBar.time) lastBar = Object.assign({}, bars[bars.length - 1]);
+  step = args.step || 0;
+  closes = bars.map((b) => b.close);
+  times = bars.map((b) => b.time);
+  maSeries.forEach((s, k) => { s.applyOptions({ color: palette.ma[k] }); s.setData(movingAverage(MA[k])); });
+  drawMaLegend();
+  zonesData = args.zones || [];
+  const st = args.stats || {};
+  $("stats").innerHTML = Object.entries(st).filter((x) => x[1] != null && x[1] !== "")
+    .map((x) => `<span>${x[0]} <b>${typeof x[1] === "number" ? fmt(x[1], precision) : x[1]}</b></span>`).join("");
+  // Kur ka plan, lihet hapësirë djathtas që zonat e hyrjes, stop-it dhe objektivit të duken qartë.
+  chart.timeScale().applyOptions({ rightOffset: zonesData.length ? 22 : 4 });
+  connectLive(args.live_symbol || null);
 
   lines.forEach((l) => candles.removePriceLine(l));
   lines = (args.levels || []).map((lv) => candles.createPriceLine({
@@ -152,6 +192,84 @@ function render(args, theme) {
   $("chg").textContent = day == null ? "" : `${day >= 0 ? "+" : ""}${day.toFixed(2)}% në 24 orë`;
   if (args.height && args.height !== baseHeight) baseHeight = args.height;
   setHeight();
+}
+
+let closes = [], times = [];
+function movingAverage(n) {
+  const out = []; let sum = 0;
+  for (let i = 0; i < closes.length; i++) {
+    sum += closes[i]; if (i >= n) sum -= closes[i - n];
+    if (i >= n - 1) out.push({ time: times[i], value: sum / n });
+  }
+  return out;
+}
+function drawMaLegend() {
+  if (!maOn || !palette) { $("mas").innerHTML = ""; return; }
+  $("mas").innerHTML = MA.map((n, k) => {
+    const d = movingAverage(n); const v = d.length ? d[d.length - 1].value : null;
+    return `<span style="color:${palette.ma[k]}"><b>MA${n}</b></span><span>${fmt(v, precision)}</span>`;
+  }).join("");
+}
+
+// Zonat e planit (hyrja, stop-i, objektivi) vizatohen si kuti të tejdukshme nga qiriri i fundit deri në skaj.
+function drawZones() {
+  const box = $("zones");
+  if (!chart || !zonesData.length) { if (box.childElementCount) box.innerHTML = ""; return; }
+  const x0 = chart.timeScale().timeToCoordinate(lastTime);
+  const width = $("chart").clientWidth - chart.priceScale("right").width();
+  const left = Math.max(0, x0 == null ? width * 0.75 : x0);
+  let html = "";
+  for (const z of zonesData) {
+    const a = candles.priceToCoordinate(z.top), b = candles.priceToCoordinate(z.bottom);
+    if (a == null || b == null) continue;
+    const top = Math.min(a, b), h = Math.max(2, Math.abs(b - a));
+    const col = z.kind === "stop" ? palette.down : z.kind === "target" ? palette.up : palette.muted;
+    // Etiketa qëndron në pjesën e dukshme të zonës, edhe kur zona del jashtë grafikut.
+    const H = $("chart").clientHeight, visTop = Math.max(top, 0), visBot = Math.min(top + h, H);
+    const labelY = visBot > visTop ? (visTop + visBot) / 2 - top : h / 2;
+    html += `<div class="zone" style="left:${left}px;width:${Math.max(0, width - left)}px;top:${top}px;height:${h}px;` +
+            `background:${col}22;border-color:${col}"><span style="color:${col};top:${labelY}px">${z.label}</span></div>`;
+  }
+  if (box.innerHTML !== html) box.innerHTML = html;
+}
+
+// Çmimi i gjallë sekondë pas sekonde nga MEXC (kontratat e përhershme). Nëse lidhja nuk hapet,
+// grafiku vazhdon me rifreskimin e zakonshëm nga serveri.
+function connectLive(symbol) {
+  if (symbol === wsKey) return;
+  if (ws) { try { ws.close(); } catch (e) {} ws = null; }
+  wsKey = symbol;
+  $("live").textContent = ""; $("live").classList.remove("on");
+  if (!symbol || !("WebSocket" in window)) return;
+  let pinger = null;
+  try { ws = new WebSocket("wss://contract.mexc.com/edge"); } catch (e) { return; }
+  const mine = ws;
+  ws.onopen = () => {
+    mine.send(JSON.stringify({ method: "sub.ticker", param: { symbol } }));
+    pinger = setInterval(() => { try { mine.send(JSON.stringify({ method: "ping" })); } catch (e) {} }, 15000);
+  };
+  ws.onmessage = (ev) => {
+    let msg; try { msg = JSON.parse(ev.data); } catch (e) { return; }
+    if (msg.channel !== "push.ticker" || !msg.data || mine !== ws) return;
+    const price = Number(msg.data.lastPrice);
+    if (!price || !lastBar) return;
+    const now = Math.floor(Date.now() / 1000) + tzOffset;
+    if (step && now >= lastBar.time + step) {          // ka filluar një qiri i ri
+      const t = lastBar.time + Math.floor((now - lastBar.time) / step) * step;
+      lastBar = { time: t, open: price, high: price, low: price, close: price };
+    } else {
+      lastBar = { time: lastBar.time, open: lastBar.open, high: Math.max(lastBar.high, price),
+                  low: Math.min(lastBar.low, price), close: price };
+    }
+    if (lastBar.time < candleLast) return;
+    candles.update(lastBar);
+    candleLast = lastBar.time;
+    lastTime = Math.max(lastTime, lastBar.time);
+    $("px").textContent = fmt(price, precision);
+    $("live").textContent = "LIVE"; $("live").classList.add("on");
+  };
+  ws.onclose = () => { if (pinger) clearInterval(pinger); if (mine === ws) { $("live").classList.remove("on"); $("live").textContent = ""; } };
+  ws.onerror = () => { try { mine.close(); } catch (e) {} };
 }
 
 window.addEventListener("message", (event) => {

@@ -884,3 +884,74 @@ def test_market_overview():
     assert up["Çmimi"] == 5.0 and up["24 orë %"] == 1.5                 # nga ticker-i kur ka
     assert up["Gjendja"].startswith("rritje") and dn["Gjendja"].startswith("rënie")
     assert 0 <= up["Gjasat lart 24h %"] <= 100 and up["Raste"] > 0
+
+
+class FakeResponse:
+    def __init__(self, body):
+        self.body = body
+
+    def raise_for_status(self):
+        pass
+
+    def json(self):
+        return self.body
+
+
+def test_futures_and_fear_greed(monkeypatch):
+    from crypto_bot import futures, sentiment
+
+    calls = []
+    bodies = {
+        "kline/BTC_USDT": {"time": [1700000000, 1700003600], "open": [1, 2], "high": [3, 4], "low": [0.5, 1.5],
+                           "close": [2, 3], "amount": [10, 20]},
+        "detail": {"contractSize": 0.0001},
+        "ticker": {"lastPrice": 70000, "high24Price": 72000, "lower24Price": 69000, "riseFallRate": -0.0123,
+                   "amount24": 2.9e9, "fundingRate": 0.0001, "fairPrice": 70001, "indexPrice": 70002, "holdVol": 600000000},
+        "funding_rate/BTC_USDT": {"fundingRate": -0.0002, "nextSettleTime": 1794528000000, "collectCycle": 8},
+        "depth/BTC_USDT": {"bids": [[69999, 300, 1], [69998, 100, 1]], "asks": [[70001, 100, 1]]},
+    }
+
+    def fake_get(url, params=None, timeout=None):
+        calls.append((url, params))
+        if "alternative.me" in url:
+            return FakeResponse({"data": [{"value": "28", "value_classification": "Fear"},
+                                          {"value": "35", "value_classification": "Fear"}]})
+        return FakeResponse({"success": True, "data": bodies[url.rsplit("/contract/", 1)[1]]})
+
+    monkeypatch.setattr(futures.requests, "get", fake_get)
+    df = futures.candles("BTC/USDT", "1h", 10)
+    assert list(df["close"]) == [2.0, 3.0] and str(df.index.tz) == "UTC" and calls[0][1]["interval"] == "Min60"
+    t = futures.ticker("BTC/USDT")
+    assert t["change_pct"] == pytest.approx(-1.23) and t["funding_pct"] == pytest.approx(0.01)
+    assert t["open_interest_coins"] == pytest.approx(60000) and t["open_interest_quote"] == pytest.approx(4.2e9)
+    assert futures.funding("BTC/USDT")["rate_pct"] == pytest.approx(-0.02)
+    assert futures.depth("BTC/USDT")["buy_pct"] == pytest.approx(80)
+    assert futures.contract("ETH/USDT:USDT") == "ETH_USDT"
+    with pytest.raises(ValueError):
+        futures.candles("BTC/USDT", "3h")
+    fg = sentiment.fear_greed()
+    assert fg == {"value": 28, "label": "Frikë", "yesterday": 35}
+
+
+def test_trade_plan_from_signal():
+    from crypto_bot.ui import _plan
+
+    cfg = Config()
+    short = {"signal": "SHORT", "signal_reason": "x", "plan": {"stop_loss": 108.0, "take_profit": None, "position_pct": 6.25}}
+    p = _plan(short, cfg, 100.0, 2.0)
+    assert p["side"] == -1 and p["stop"] == 108.0 and p["take"] == pytest.approx(84.0) and p["orient"]   # 2× rreziku
+    assert p["entry_low"] == pytest.approx(99.5) and p["entry_high"] == pytest.approx(100.5) and p["rr"] == pytest.approx(2)
+    long = {"signal": "BLI", "signal_reason": "x", "plan": {"stop_loss": 95.0, "take_profit": 110.0, "position_pct": 10}}
+    p = _plan(long, cfg, 100.0, 1.0)
+    assert p["take"] == 110.0 and not p["orient"] and p["rr"] == pytest.approx(2) and p["reward_pct"] == pytest.approx(10)
+    assert _plan({"signal": "PRIT"}, cfg, 100.0, 1.0) is None
+
+
+def test_chart_payload_zones_and_live():
+    from crypto_bot.live_chart import chart_payload
+
+    df = candles(trend(50, 100, 0.0))
+    p = chart_payload(df, "BTCUSDT Perpetual", "1h", zones=[("Stop", 110.0, 100.0, "stop"), ("Pa", None, 1.0, "entry")],
+                      stats={"Maja 24h": 5.0}, live_symbol="BTC_USDT")
+    assert p["zones"] == [{"label": "Stop", "top": 110.0, "bottom": 100.0, "kind": "stop"}]
+    assert p["step"] == 3600 and p["live_symbol"] == "BTC_USDT" and p["stats"] == {"Maja 24h": 5.0}

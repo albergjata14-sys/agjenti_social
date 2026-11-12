@@ -21,7 +21,15 @@ I njëjti panel gjendet edhe te `app.py`, si zgjedhja "Crypto Trading Agent".
   (rifreskim çdo 5 sekonda): zmadhim me rrotën e miut ose me dy gishta, lëvizje duke tërhequr, butonat
   "E gjitha", "Tani" dhe "Zmadho". Tregon vijat Hyrja / Stop-loss / Fitimi (TP), shigjeta për hyrjet dhe
   rrathë për daljet. Poshtë: Bli / Shit short / Mbyll për provat me dorë me para demo.
-- **Tregu** – ecuria e 10–30 monedhave: 24 orë, 7 ditë, lëvizja 14-ditore, gjendja, sinjali i robotit dhe
+- Grafiku tregon si parazgjedhje kontratat **Futures (Perpetual)** të MEXC, si në aplikacionin e tyre: maja,
+  fundi dhe volumi 24 orë, norma e financimit me numërim mbrapsht, kontratat e hapura, mesataret MA5/10/30/60
+  (butoni MA) dhe çmimin **LIVE** çdo sekondë nga lidhja e drejtpërdrejtë e MEXC (`wss://contract.mexc.com/edge`).
+  Kur ka sinjal, shfaqet **plani i tregtimit** (zona e hyrjes, stop-loss, objektivi) si kuti në grafik dhe si
+  kartë, me butonin "Hap në demo me këtë plan". Kur strategjia e lë fitimin të hapur, objektivi i kartës është
+  2 herë rreziku, vetëm orientues. Pranë është "Gjendja e tregut": lëvizja 14-ditore, mesatarja, financimi,
+  indeksi i frikës dhe lakmisë ([alternative.me](https://alternative.me/crypto/fear-and-greed-index/)) dhe
+  pjesa e blerësve/shitësve në librin e urdhrave.
+- **Tregu** – ecuria e 10–30 monedhave: 24 orë, 7 ditë, lëvizja 14-ditore, financimi, gjendja, sinjali i robotit dhe
   "gjasat historike" për 24 orët e ardhshme (shih më poshtë se çfarë janë).
 - **Roboti** – Nis / Ndalo, kapitali demo, pozicionet, tregtitë dhe arsyet e vendimeve.
 - **Njoftime** – lidhja me Telegram, alarmet e çmimit dhe njoftimet e fundit.
