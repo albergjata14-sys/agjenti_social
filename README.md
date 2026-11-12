@@ -78,6 +78,8 @@ python -m crypto_bot backtest --strategjia score --fitim 4 --humbje 2   # strate
 python -m crypto_bot portofol --candles 5000      # si do të kishte dalë roboti mbi shumë monedha njëherësh
 python -m crypto_bot nis                          # roboti punon vetë, në SIMULIM (para virtuale)
 python -m crypto_bot nis --gjithe-tregun          # njësoj, por zgjedh nga gjithë tregu
+python -m crypto_bot analist                       # analisti: provon 6 strategji dhe miraton ato që fitojnë
+python -m crypto_bot nis --ekip                    # analisti + tregtari + turneu (simulim)
 python -m crypto_bot nis --aktiv                   # mënyra aktive: lart ose poshtë, gjithë tregu, me këmbim
 python -m crypto_bot portofol --aktiv --candles 5000   # prova e mënyrës aktive në të kaluarën
 python -m crypto_bot nis --live                   # PARA REALE (kërkon konfirmim dhe çelësa API)
@@ -131,6 +133,25 @@ planin hyrje / fitim / stop. Roboti tregton pa levë.
 mbyllet nën fundin e 55 qirinjve, nën EMA200 dhe me trend ditor rënës; e mbyll kur çmimi mbyllet mbi
 majën e 20 qirinjve ose kur preket stop-loss (që është sipër hyrjes). Punon në simulim në çdo platformë
 dhe me urdhra në MT5; tregu spot i MEXC, Binance dhe Bybit nuk e lejon me urdhra realë.
+
+### Ekipi: analisti + tregtari (`nis --ekip`)
+
+Dy robotë që punojnë bashkë:
+
+- **Analisti** (`python -m crypto_bot analist`) shkarkon historinë e 20 monedhave më të tregtuara dhe provon
+  6 strategji: si do të kishin dalë në periudhën më të vjetër ("mësimi") dhe në 120 ditët e fundit
+  ("kontrolli"). **Miraton** ato që fituan në të dyja dhe bënë mjaft tregti; kur asnjë nuk e bën,
+  rekomandon **pushim**. Rekomandimi ruhet te `crypto_bot_recommendation.json`.
+- **Tregtari** (`python -m crypto_bot nis --ekip`) i luan njëkohësisht të gjitha strategjitë e miratuara, secila
+  me pjesën e vet të kapitalit demo; ato që nuk miratohen vetëm mbyllin pozicionet që kanë. Rifreskon vetë
+  analizën çdo `analyst_hours` (12) orë.
+- **Turneu** (pjesë e `--ekip`, hiqet me `--pa-turne`) provon pa ndalur çdo strategji me gjithë kapitalin
+  demo, në kohë reale. Analisti nuk miraton më një strategji që po humbet qartë në turne (nën −5% pas 15 tregtive).
+
+Pse miratim dhe jo vetëm "më e mira": në një provë jashtë mostrës (20 monedha, 14 muaj, vendim çdo 60
+ditë), kalimi te strategjia që kishte fituar më shumë së fundmi dha +2.6%; luajtja e të gjitha të
+miratuarave njëherësh dha +12.7%; të gjitha pa filtër +6.6%. Strategjitë e mira të mbajtura fikse dhanë
++13% deri +17%, por kjo dihet vetëm pas faktit. Ekipi punon vetëm në simulim.
 
 ### Mënyra aktive (`--aktiv`, strategjia `momentum`)
 

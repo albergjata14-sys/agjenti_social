@@ -16,6 +16,8 @@ class Broker:
         self.path = Path(cfg.state_file)
         if self.path.exists():
             self.state = json.loads(self.path.read_text())
+            if self.state.get("team"):
+                raise RuntimeError(f"{self.path} është përmbledhja e ekipit; përdor një state_file tjetër ose nise me --ekip.")
             if self.state.get("live") != self.live:
                 raise RuntimeError(f"{self.path} i përket modalitetit tjetër (simulim/real). "
                                    "Përdor një state_file tjetër.")

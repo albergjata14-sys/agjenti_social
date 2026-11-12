@@ -91,8 +91,10 @@ def recent(cfg, limit: int = 50) -> list:
 
 # --- alarmet e çmimit ------------------------------------------------------------------------------
 def load_alerts(cfg) -> list:
+    if not cfg.alerts_file:
+        return []
     p = Path(cfg.alerts_file)
-    return json.loads(p.read_text()) if p.exists() else []
+    return json.loads(p.read_text()) if p.is_file() else []
 
 
 def save_alerts(cfg, alerts: list):

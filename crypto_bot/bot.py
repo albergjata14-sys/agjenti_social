@@ -51,6 +51,8 @@ def record(cfg, **entry):
     """Shton një rresht te regjistri i vendimeve (JSON Lines)."""
     if cfg.log_file:
         entry = {"time": datetime.now(timezone.utc).isoformat(timespec="seconds"), **entry}
+        if cfg.label:
+            entry["strategy"] = cfg.label
         with open(cfg.log_file, "a", encoding="utf-8") as f:
             f.write(json.dumps(entry, ensure_ascii=False) + "\n")
 
@@ -159,6 +161,8 @@ def run_cycle(exchange, broker, cfg) -> list:
             skip = "pozicioni është tashmë i hapur"
         elif entered.get(sym) == a["time"]:
             skip = "ky sinjal është përdorur tashmë (pa ri-hyrje në të njëjtin qiri)"
+        elif cfg.pause_entries:
+            skip = "analisti nuk e ka miratuar këtë strategji tani" if cfg.label else "hyrjet e reja janë në pushim"
         elif halted:
             skip = halted
         elif a["signal"] == "BLI" and market_up is False:
@@ -192,12 +196,18 @@ def run_cycle(exchange, broker, cfg) -> list:
     try:
         if cfg.notify_trades:
             for kind, sym, info in actions:
-                notify.emit(cfg, "tregti", sym, notify.trade_message(kind, sym, info, cfg.quote))
+                text = notify.trade_message(kind, sym, info, cfg.quote)
+                notify.emit(cfg, "tregti", sym, f"[{cfg.label}] {text}" if cfg.label else text)
         notify.check_market(cfg, st, results)
         notify.check_price_alerts(cfg, {a["symbol"]: a["price"] for a in results} | prices)
     except Exception as e:
         log(f"Njoftimet dështuan (roboti vazhdon): {e}")
     st["heartbeat"] = time.time()
+    st.setdefault("started", time.time())
+    try:
+        st["last_equity"] = broker.equity(prices)
+    except Exception:
+        pass
     broker.save()
     log(f"Kapitali: {broker.equity(prices):.2f} {cfg.quote} (sot {day_pct:+.2f}%"
         f"{', BLERJET TË NDALURA' if halted else ''}) | pozicione të hapura: "
@@ -228,3 +238,110 @@ def run_forever(exchange, broker, cfg):
         stop.unlink(missing_ok=True)
         broker.state["heartbeat"] = 0
         broker.save()
+
+
+class CycleCache:
+    """Mbështjellës i platformës që mban të dhënat e tregut për një cikël, që shumë strategji t'i ndajnë."""
+
+    CACHED = {"fetch_ohlcv", "fetch_ticker", "fetch_tickers", "load_markets"}
+
+    def __init__(self, exchange):
+        self._ex, self._memo = exchange, {}
+        self._now = exchange.milliseconds()
+
+    def milliseconds(self):
+        return self._now     # ora ngrihet për gjithë ciklin, që kërkesat e njëjta të njihen si të njëjta
+
+    def __getattr__(self, name):
+        attr = getattr(self._ex, name)
+        if name not in self.CACHED:
+            return attr
+
+        def cached(*args, **kwargs):
+            key = (name, args, tuple(sorted(kwargs.items())))
+            if key not in self._memo:
+                self._memo[key] = attr(*args, **kwargs)
+            return self._memo[key]
+        return cached
+
+
+def run_team_cycle(exchange, base_cfg, rec, tournament: bool = True) -> dict:
+    """Një cikël i ekipit: çdo strategji tregton me pjesën e saj të kapitalit (vetëm të miratuarat hapin
+    pozicione të reja), dhe turneu i provon të gjitha me gjithë kapitalin demo. Kthen gjendjen e përbashkët."""
+    from .analyst import CANDIDATES, team_config, tournament_config
+    from .broker import Broker
+
+    cache = CycleCache(exchange)
+    approved = set((rec or {}).get("approved", []))
+    team = {"team": True, "live": False, "heartbeat": time.time(), "cash": 0.0, "positions": {}, "trades": [],
+            "members": [], "approved": sorted(approved), "recommendation": (rec or {}).get("name")}
+    for cand in CANDIDATES:
+        cfg = team_config(base_cfg, cand, approved)
+        broker = Broker(cfg)
+        try:
+            run_cycle(cache, broker, cfg)
+        except Exception as e:
+            log(f"[{cand['name']}] gabim në cikël: {e}")
+        st = broker.state
+        equity = st.get("last_equity", st["cash"])
+        team["cash"] += st["cash"]
+        for sym, pos in st["positions"].items():
+            key = sym if sym not in team["positions"] else f"{sym}#{cand['id']}"
+            team["positions"][key] = {**pos, "strategy": cand["name"]}
+        team["trades"] += [{**t, "strategy": cand["name"]} for t in st["trades"]]
+        team["members"].append({"id": cand["id"], "name": cand["name"], "approved": cand["id"] in approved,
+                                "capital": cfg.paper_balance, "equity": equity, "open": len(st["positions"]),
+                                "trades": len(st["trades"])})
+    team["trades"].sort(key=lambda t: t.get("closed", 0))
+    team["last_equity"] = sum(m["equity"] for m in team["members"])
+    if tournament:
+        for cand in CANDIDATES:
+            cfg = tournament_config(base_cfg, cand)
+            try:
+                run_cycle(cache, Broker(cfg), cfg)
+            except Exception as e:
+                log(f"[turne {cand['name']}] gabim: {e}")
+    Path(base_cfg.state_file).write_text(json.dumps(team, indent=2))
+    return team
+
+
+def run_team_forever(exchange, base_cfg, tournament: bool = True):
+    """Tregtari i ekipit: rifreskon rekomandimin e analistit kur vjetrohet dhe luan strategjitë e miratuara."""
+    from .analyst import analyze_market, load_recommendation
+
+    stop = stop_file(base_cfg)
+    stop.unlink(missing_ok=True)
+    log("Ekipi u nis (SIMULIM): analisti miraton strategjitë, tregtari i luan njëkohësisht"
+        + (", turneu i provon të gjitha." if tournament else ".") + " Ctrl+C për ta ndalur.")
+    last_members = None
+    try:
+        while not stop.exists():
+            rec = load_recommendation(base_cfg)
+            if not rec or time.time() - rec.get("ts", 0) > base_cfg.analyst_hours * 3600:
+                try:
+                    rec = analyze_market(exchange, base_cfg, log=log)
+                    text = (f"🧠 Analisti: {'pushim, asnjë strategji e miratuar' if rec['action'] == 'pause' else 'miratoi ' + ', '.join(rec['approved'])}")
+                    log(text)
+                    notify.emit(base_cfg, "analist", "", text)
+                except Exception as e:
+                    log(f"Analisti dështoi (provohet më vonë, vazhdon me rekomandimin e vjetër): {e}")
+            try:
+                team = run_team_cycle(exchange, base_cfg, rec, tournament)
+                if team["approved"] != last_members:
+                    last_members = team["approved"]
+                log(f"Ekipi: kapitali {team['last_equity']:.2f} {base_cfg.quote} | pozicione {len(team['positions'])} | "
+                    f"miratuar: {', '.join(team['approved']) or 'asnjë'}")
+            except Exception as e:
+                log(f"Gabim në ciklin e ekipit (do të riprovohet): {e}")
+            for _ in range(int(base_cfg.poll_seconds)):
+                if stop.exists():
+                    break
+                time.sleep(1)
+        log("Ekipi u ndal nga paneli.")
+    finally:
+        stop.unlink(missing_ok=True)
+        p = Path(base_cfg.state_file)
+        if p.exists():
+            st = json.loads(p.read_text())
+            st["heartbeat"] = 0
+            p.write_text(json.dumps(st, indent=2))

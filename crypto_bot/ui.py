@@ -11,7 +11,7 @@ import numpy as np
 import pandas as pd
 import streamlit as st
 
-from . import futures, journal, notify, sentiment
+from . import analyst, futures, journal, notify, sentiment
 from .backtest import backtest
 from .bot import is_running, stop_file
 from .broker import Broker
@@ -512,17 +512,17 @@ def tab_alerts(cfg, symbol, price):
     st.dataframe(d[["Koha", "text", "Telegram"]].rename(columns={"text": "Njoftimi"}), width="stretch", hide_index=True)
 
 
-def _positions_table(positions: dict, exchange) -> pd.DataFrame:
+def _positions_table(positions: dict, tickers: dict) -> pd.DataFrame:
     rows = []
-    for sym, p in positions.items():
-        try:
-            price = float(exchange.fetch_ticker(sym)["last"])
-        except Exception:
-            price = p["entry"]
+    for key, p in positions.items():
+        sym = key.split("#")[0]
+        price = float((tickers.get(sym) or {}).get("last") or p["entry"])   # një kërkesë për të gjitha çmimet
         side = p.get("side", 1)
-        rows.append({"Monedha": sym, "Drejtimi": "long" if side > 0 else "short", "Hyrja": p["entry"],
+        rows.append({**({"Strategjia": p["strategy"]} if p.get("strategy") else {}),
+                     "Monedha": sym, "Drejtimi": "long" if side > 0 else "short", "Hyrja": p["entry"],
                      "Çmimi tani": price, "Fitim/humbje %": round((price / p["entry"] - 1) * 100 * side, 2),
-                     "Vlera": round(Broker.value(p, price), 2), "Stop-loss": p["sl"], "Fitimi (TP)": p["tp"]})
+                     "Vlera": round(Broker.value(p, price), 2), "Stop-loss": p["sl"],
+                     "Fitimi (TP)": p["tp"] if p["tp"] else "i hapur"})
     return pd.DataFrame(rows)
 
 
@@ -530,14 +530,18 @@ def _positions_table(positions: dict, exchange) -> pd.DataFrame:
 def tab_robot(cfg, exchange):
     state = _read_state(cfg)
     running = is_running(cfg, state or {})
-    whole = st.toggle("Skano gjithë tregun (jo vetëm monedhën e zgjedhur)", True, disabled=running)
+    team_mode = st.radio("Si punon roboti", ["Ekipi: analisti + tregtari", "Një strategji (rregullimet e mia)"],
+                         horizontal=True, disabled=running, key="robot_mode",
+                         help="Ekipi: analisti miraton strategjitë që fitojnë, tregtari i luan njëkohësisht me kapitalin "
+                              "e ndarë, dhe turneu i provon të gjitha me para demo.") .startswith("Ekipi")
+    whole = True if team_mode else st.toggle("Skano gjithë tregun (jo vetëm monedhën e zgjedhur)", True, disabled=running)
     c1, c2 = st.columns(2)
     if c1.button("▶ Nis robotin", disabled=running, width="stretch", type="primary"):
         # Roboti niset me pikërisht rregullimet që shihen në panel.
         Path(UI_CONFIG).write_text(json.dumps(asdict(replace(cfg, scan_market=whole)), indent=2))
         flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
         with open("crypto_bot_output.log", "a", encoding="utf-8") as out:
-            subprocess.Popen([sys.executable, "-m", "crypto_bot", "nis", "--config", UI_CONFIG],
+            subprocess.Popen([sys.executable, "-m", "crypto_bot", "nis", "--config", UI_CONFIG] + (["--ekip"] if team_mode else []),
                              stdout=out, stderr=subprocess.STDOUT, creationflags=flags)
         st.toast("Roboti po niset; gjendja shfaqet pas ciklit të parë.")
     if c2.button("■ Ndalo robotin", disabled=not running, width="stretch"):
@@ -546,7 +550,7 @@ def tab_robot(cfg, exchange):
     if state is None:
         return st.info("Roboti nuk është nisur ende. Tregton vetë me para demo (virtuale) mbi çmime reale.")
     ago = time.time() - state.get("heartbeat", 0)
-    table = _positions_table(state["positions"], exchange)
+    table = _positions_table(state["positions"], _tickers(cfg.exchange))
     trades = state["trades"]
     equity = state["cash"] + (float(table["Vlera"].sum()) if len(table) else 0.0)
     (st.success if running else st.info)(
@@ -557,6 +561,15 @@ def tab_robot(cfg, exchange):
     m[0].metric("Kapitali demo", f"{equity:,.2f} {cfg.quote}", f"{(equity / cfg.paper_balance - 1) * 100:+.2f}% nga fillimi")
     m[1].metric("Fitimi i mbyllur", f"{sum(t['pnl'] for t in trades):+.2f} {cfg.quote}")
     m[2].metric("Tregti fituese", f"{sum(t['pnl'] > 0 for t in trades)} nga {len(trades)}" if trades else "–")
+    if state.get("team"):
+        st.markdown("**Ekipi i strategjive**")
+        st.dataframe(pd.DataFrame([{
+            "Strategjia": m["name"], "Miratuar nga analisti": "po" if m["approved"] else "jo",
+            "Kapitali": m["capital"], "Tani": round(m["equity"], 2),
+            "%": round((m["equity"] / m["capital"] - 1) * 100, 2), "Të hapura": m["open"], "Tregti": m["trades"]}
+            for m in state["members"]]), width="stretch", hide_index=True,
+            column_config={"%": st.column_config.NumberColumn(format="%+.2f"),
+                           "Kapitali": st.column_config.NumberColumn(format="%.2f")})
     if len(table):
         st.markdown("**Pozicionet e hapura**")
         st.dataframe(table, width="stretch", hide_index=True,
@@ -565,7 +578,7 @@ def tab_robot(cfg, exchange):
         st.markdown("**Tregtitë e mbyllura**")
         t = pd.DataFrame(trades).iloc[::-1]
         t["closed"] = pd.to_datetime(t["closed"], unit="s").dt.strftime("%d %b %H:%M")
-        cols = {"closed": "Mbyllur", "symbol": "Monedha", "side": "Drejtimi", "entry": "Hyrja", "exit": "Dalja",
+        cols = {"closed": "Mbyllur", "strategy": "Strategjia", "symbol": "Monedha", "side": "Drejtimi", "entry": "Hyrja", "exit": "Dalja",
                 "reason": "Arsyeja", "pnl": "Fitim/humbje", "pnl_pct": "%"}
         st.dataframe(t[[c for c in cols if c in t]].rename(columns=cols), width="stretch", hide_index=True)
     log = Path(cfg.log_file)
@@ -577,6 +590,52 @@ def tab_robot(cfg, exchange):
                 d = d[d["action"].isin(["BLI", "SHORT", "SHIT"])]
             cols = {"time": "Koha (UTC)", "symbol": "Monedha", "action": "Vendimi", "reason": "Arsyeja", "price": "Çmimi"}
             st.dataframe(d[[c for c in cols if c in d]].rename(columns=cols).head(60), width="stretch", hide_index=True)
+
+
+def tab_analyst(cfg, exchange):
+    st.caption("Analisti provon disa strategji mbi monedhat më të tregtuara: si do të kishin dalë në një periudhë më "
+               "të vjetër (mësimi) dhe në ditët e fundit (kontrolli). Miraton ato që fituan në të dyja; tregtari i "
+               "luan njëkohësisht. Kur asnjë nuk fiton, rekomandon pushim.")
+    rec = analyst.load_recommendation(cfg)
+    c = st.columns([1, 1])
+    n = c[0].select_slider("Sa monedha", [10, 20, 30], 20, key="analyst_n")
+    if c[1].button("🧠 Analizo tani", type="primary", width="stretch"):
+        with st.spinner("Analisti po shkarkon historinë dhe po provon strategjitë (1–3 minuta)..."):
+            rec = analyst.analyze_market(exchange, cfg, n_symbols=n, log=lambda *_: None)
+        notify.emit(cfg, "analist", "", "🧠 Analisti: " + ("pushim, asnjë strategji e miratuar" if rec["action"] == "pause"
+                                                          else "miratoi " + ", ".join(rec["approved"])))
+    if not rec:
+        return st.info("Analisti nuk është nisur ende. Shtyp “Analizo tani”, ose nise robotin si ekip: analisti "
+                       f"rifreskohet vetë çdo {cfg.analyst_hours:g} orë.")
+    when = pd.Timestamp(rec["ts"], unit="s", tz="UTC").tz_convert("Europe/Tirane")
+    (st.warning if rec["action"] == "pause" else st.success)(
+        f"**{'Pushim' if rec['action'] == 'pause' else 'Strategji të miratuara: ' + str(len(rec['approved']))}** · "
+        f"{rec['reason']}  \nAnalizuar më {when:%d %b %H:%M}, {rec['symbols']} monedha, kontrolli = {rec['test_days']} ditët e fundit.")
+    fwd = rec.get("forward") or analyst.forward_results(cfg)
+    fwd_now = analyst.forward_results(cfg)
+    rows = []
+    for r in rec["results"]:
+        if "error" in r:
+            continue
+        f = fwd_now.get(r["id"]) or fwd.get(r["id"]) or {}
+        rows.append({"Strategjia": r["name"], "Miratuar": "✅" if r["id"] in rec.get("approved", []) else "–",
+                     "Mësimi %": r["train"]["return_pct"], "Kontrolli %": r["test"]["return_pct"],
+                     "Rënia maks. %": r["test"]["drawdown_pct"], "Tregti": r["test"]["trades"],
+                     "Turne live %": f.get("return_pct"), "Tregti live": f.get("trades")})
+    st.dataframe(pd.DataFrame(rows), width="stretch", hide_index=True, column_config={
+        "Mësimi %": st.column_config.NumberColumn(format="%+.1f"),
+        "Kontrolli %": st.column_config.NumberColumn(format="%+.1f"),
+        "Turne live %": st.column_config.NumberColumn(format="%+.2f", help="Prova në kohë reale me para demo që nga nisja e turneut")})
+    st.caption("“Turne live” mbushet kur roboti punon si ekip: çdo strategji provohet pa ndalur me 1000 USDT demo. "
+               "Një strategji që humbet qartë në turne (nën −5% pas 15 tregtive) nuk miratohet më.")
+    with st.expander("Pse miraton disa strategji dhe nuk zgjedh vetëm “më të mirën”?"):
+        st.markdown("Në një provë jashtë mostrës (20 monedha, 14 muaj, vendim çdo 60 ditë):\n\n"
+                    "| Mënyra | Fitimi |\n|---|---|\n"
+                    "| Kalimi te strategjia që fitoi më shumë së fundmi | +2.6% |\n"
+                    "| Të gjitha strategjitë e miratuara njëherësh | +12.7% |\n"
+                    "| Të gjitha strategjitë pa filtër | +6.6% |\n\n"
+                    "Strategjia që doli më mirë së fundmi shpesh nuk vazhdoi të dalë mirë. Heqja e atyre që humbasin "
+                    "dhe ndarja e kapitalit mes të tjerave ndihmoi më shumë. As kjo nuk garanton fitim.")
 
 
 def _backtest_section(cfg, exchange, symbol):
@@ -706,8 +765,9 @@ def render():
     if got is None:
         return
     cfg, exchange, symbol = got
-    tabs = st.tabs(["📈 Grafiku", "🌐 Tregu", "🤖 Roboti", "🔔 Njoftime", "🧪 Prova"])
-    calls = [(tab_chart, (cfg, exchange, symbol)), (tab_market, (cfg, exchange)), (tab_robot, (cfg, exchange)),
+    tabs = st.tabs(["📈 Grafiku", "🌐 Tregu", "🧠 Analisti", "🤖 Roboti", "🔔 Njoftime", "🧪 Prova"])
+    calls = [(tab_chart, (cfg, exchange, symbol)), (tab_market, (cfg, exchange)), (tab_analyst, (cfg, exchange)),
+             (tab_robot, (cfg, exchange)),
              (tab_alerts, (cfg, symbol, None)), (tab_tests, (cfg, exchange, symbol))]
     for tab, (fn, args) in zip(tabs, calls):
         with tab:

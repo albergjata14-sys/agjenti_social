@@ -955,3 +955,79 @@ def test_chart_payload_zones_and_live():
                       stats={"Maja 24h": 5.0}, live_symbol="BTC_USDT")
     assert p["zones"] == [{"label": "Stop", "top": 110.0, "bottom": 100.0, "kind": "stop"}]
     assert p["step"] == 3600 and p["live_symbol"] == "BTC_USDT" and p["stats"] == {"Maja 24h": 5.0}
+
+
+def test_analyst_approves_and_team_trades(tmp_path):
+    from crypto_bot import analyst
+    from crypto_bot.bot import CycleCache, run_team_cycle
+
+    rows = [
+        {"id": "a", "name": "A", "overrides": {"strategy": "momentum"}, "eligible": True,
+         "train": {"return_pct": 10}, "test": {"return_pct": 3, "drawdown_pct": 5, "trades": 20}, "test_from": "x", "test_to": "y"},
+        {"id": "b", "name": "B", "overrides": {"strategy": "breakout"}, "eligible": True,
+         "train": {"return_pct": 5}, "test": {"return_pct": 8, "drawdown_pct": 5, "trades": 20}, "test_from": "x", "test_to": "y"},
+        {"id": "c", "name": "C", "overrides": {}, "eligible": False,
+         "train": {"return_pct": -5}, "test": {"return_pct": 9, "drawdown_pct": 5, "trades": 20}},
+    ]
+    rec = analyst.choose(rows)
+    assert rec["action"] == "trade" and rec["approved"] == ["b", "a"] and rec["id"] == "b"
+    # Një strategji që po humbet qartë në turne nuk miratohet.
+    assert analyst.choose(rows, {"b": {"return_pct": -8, "trades": 20}})["approved"] == ["a"]
+    pause = analyst.choose([rows[2]])
+    assert pause["action"] == "pause" and pause["approved"] == []
+    base = Config()
+    assert analyst.apply_recommendation(base, pause).pause_entries
+    assert analyst.apply_recommendation(base, rec).strategy == "breakout"
+    assert analyst.apply_recommendation(base, None) is base
+
+    # Vlerësimi me të dhëna sintetike: një trend i qartë rritës duhet të miratohet nga blerjet.
+    frames = {f"C{i}/USDT": (candles(trend(1500, 100, 0.002, 0.01, seed=i)), None) for i in range(3)}
+    frames["BTC/USDT"] = (candles(trend(1500, 100, 0.002, 0.01, seed=9)), None)
+    res = analyst.evaluate({"1h": frames, "4h": frames}, Config(daily_trend_ema=0), test_days=20)
+    by = {r["id"]: r for r in res}
+    assert set(by) == {c["id"] for c in analyst.CANDIDATES}
+    assert all("train" in r and "test" in r for r in res)
+    assert by["momentum_blerje"]["train"]["return_pct"] > 0
+
+    # Ekipi: çdo strategji ka pjesën e vet të kapitalit; vetëm të miratuarat hapin pozicione.
+    cfg = Config(symbols=["UP/USDT"], candles=300, strategy="momentum", momentum_days=2, momentum_ema=20,
+                 daily_trend_ema=0, market_filter_symbol="", state_file=str(tmp_path / "s.json"),
+                 log_file=str(tmp_path / "d.jsonl"), scan_top_n=2)
+    ex = make_fake({"UP/USDT": trend(400, 100, 0.003), "DN/USDT": trend(400, 100, -0.003)})
+    ex.t = {"UP/USDT": {"quoteVolume": 9}, "DN/USDT": {"quoteVolume": 5}}
+    real = analyst.CANDIDATES
+    analyst.CANDIDATES = [{"id": "m", "name": "M", "overrides": {"strategy": "momentum", "timeframe": "4h",
+                                                                   "allow_short": False, "momentum_days": 2.0}},
+                          {"id": "n", "name": "N", "overrides": {"strategy": "momentum", "timeframe": "4h",
+                                                                   "allow_short": False, "momentum_days": 2.0}}]
+    try:
+        team = run_team_cycle(ex, cfg, {"approved": ["m"], "name": "M"}, tournament=True)
+    finally:
+        analyst.CANDIDATES = real
+    members = {m["id"]: m for m in team["members"]}
+    assert members["m"]["approved"] and not members["n"]["approved"]
+    assert members["m"]["open"] == 1 and members["n"]["open"] == 0          # e pamiratuara nuk hyn
+    assert members["m"]["capital"] == pytest.approx(500)                      # 1000 / 2 strategji
+    assert team["team"] and "UP/USDT" in team["positions"] and team["positions"]["UP/USDT"]["strategy"] == "M"
+    assert json.loads((tmp_path / "s.json").read_text())["team"]
+    with pytest.raises(RuntimeError):
+        Broker(cfg)                                                           # përmbledhja nuk përdoret si portofol
+    # Turneu provon edhe strategjinë e pamiratuar, me gjithë kapitalin.
+    shadow = json.loads((tmp_path / "s_turne_n.json").read_text())
+    assert len(shadow["positions"]) == 1
+    assert any("[M]" in e["text"] for e in notify_recent(cfg))
+
+    # Memoria e ciklit: kërkesat e njëjta shkojnë në platformë vetëm një herë.
+    calls = []
+    ex.fetch_ohlcv_orig = ex.fetch_ohlcv
+    ex.fetch_ohlcv = lambda *a, **k: calls.append(a) or ex.fetch_ohlcv_orig(*a, **k)
+    cc = CycleCache(ex)
+    fetch_candles(cc, "UP/USDT", "1h", 100)
+    n = len(calls)
+    fetch_candles(cc, "UP/USDT", "1h", 100)
+    assert len(calls) == n
+
+
+def notify_recent(cfg):
+    from crypto_bot import notify
+    return notify.recent(cfg, 100)

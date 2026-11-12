@@ -66,6 +66,13 @@ class Config:
     state_file: str = "crypto_bot_state.json"
     log_file: str = "crypto_bot_decisions.jsonl"   # çdo vendim me arsyen ("" = pa regjistër)
     predictions_file: str = "crypto_bot_predictions.jsonl"   # ditari i parashikimeve (komanda `ditar`)
+    # --- analisti dhe turneu (shih crypto_bot/analyst.py) ---
+    recommendation_file: str = "crypto_bot_recommendation.json"   # rekomandimi i fundit i analistit
+    follow_analyst: bool = False       # tregtari përdor strategjinë që rekomandon analisti
+    analyst_hours: float = 12.0        # sa shpesh e rifreskon tregtari rekomandimin kur e ndjek analistin
+    tournament: bool = False           # prova paralele me para demo e të gjitha strategjive kandidate
+    label: str = ""                    # emri i strategjisë në njoftime dhe regjistër (ekipi / turneu)
+    pause_entries: bool = False        # mos hap pozicione të reja (p.sh. kur analisti rekomandon pushim)
     # --- njoftimet (shih crypto_bot/notify.py) ---
     notify_file: str = "crypto_bot_notifications.jsonl"   # regjistri i njoftimeve që shfaq paneli
     alerts_file: str = "crypto_bot_alerts.json"           # alarmet e çmimit të vendosura nga përdoruesi

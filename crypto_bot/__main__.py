@@ -54,7 +54,11 @@ def run_alerts(exchange, cfg):
 
 def main(argv=None):
     p = argparse.ArgumentParser(prog="crypto_bot", description="Robot analize dhe tregtimi për kriptomonedha")
-    p.add_argument("komanda", choices=["analizo", "skano", "backtest", "portofol", "nis", "ditar", "njoftime"])
+    p.add_argument("komanda", choices=["analizo", "skano", "backtest", "portofol", "nis", "ditar", "njoftime", "analist"])
+    p.add_argument("--ekip", action="store_true",
+                   help="nis: analisti miraton strategjitë dhe tregtari i luan të gjitha njëkohësisht (simulim)")
+    p.add_argument("--pa-turne", action="store_true", help="nis --ekip: pa provën paralele të të gjitha strategjive")
+    p.add_argument("--monedha", type=int, default=20, help="analist: sa monedha të përdoren")
     p.add_argument("veprimi", nargs="?", choices=["shto", "lidh", "test"],
                    help="ditar: shto | njoftime: lidh (Telegram), test, shto (alarm çmimi)")
     p.add_argument("--mbi", type=float, help="njoftime shto: njofto kur çmimi ngjitet mbi këtë nivel")
@@ -90,6 +94,22 @@ def main(argv=None):
         overrides.update({k: v for k, v in ACTIVE.items() if overrides.get(k) is None})
     cfg = load_config(a.config, **overrides)
 
+    if a.komanda == "nis" and a.ekip:
+        if a.live:
+            raise ValueError("ekipi punon vetëm në simulim; nise pa --live")
+        from .bot import run_team_forever
+        return run_team_forever(connect(cfg), cfg, tournament=not a.pa_turne)
+    if a.komanda == "analist":
+        from .analyst import analyze_market
+        rec = analyze_market(connect(cfg), cfg, n_symbols=a.monedha, log=log)
+        print(f"\nRekomandimi: {rec['name']}\n{rec['reason']}\nTë miratuara: {', '.join(rec['approved']) or 'asnjë'}\n")
+        for r in rec["results"]:
+            if "error" in r:
+                print(f"  {r['name']:45s} gabim: {r['error']}")
+                continue
+            print(f"  {r['name']:45s} mësimi {r['train']['return_pct']:+6.1f}% | kontrolli {r['test']['return_pct']:+6.1f}% "
+                  f"(rënia {r['test']['drawdown_pct']:.0f}%, {r['test']['trades']} tregti) | {'MIRATUAR' if r['eligible'] else 'jo'}")
+        return
     if a.komanda == "nis":
         exchange = connect(cfg, with_keys=a.live)
         if a.live and cfg.allow_short and not getattr(exchange, "stop_on_order", False):
