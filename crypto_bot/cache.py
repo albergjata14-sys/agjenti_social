@@ -1,0 +1,44 @@
+"""Ruajtja e qirinjve në disk: herën e parë shkarkohet historia, pastaj merren vetëm qirinjtë e rinj.
+
+Kështu analisti mund të rifreskojë 30 monedha në tre intervale disa herë në orë pa e ngarkuar platformën.
+"""
+import os
+from pathlib import Path
+
+import pandas as pd
+
+from .data import fetch_candles
+
+DIR = os.environ.get("CRYPTO_BOT_CACHE", "crypto_bot_cache")
+
+
+def _path(symbol: str, timeframe: str) -> Path:
+    return Path(DIR) / f"{symbol.replace('/', '_').replace(':', '_')}_{timeframe}.pkl"
+
+
+def candles(exchange, symbol: str, timeframe: str, limit: int) -> pd.DataFrame:
+    """Qirinjtë e mbyllur të fundit `limit`, nga disku kur ka dhe nga platforma vetëm për pjesën që mungon."""
+    p = _path(symbol, timeframe)
+    old = None
+    if p.exists():
+        try:
+            old = pd.read_pickle(p)
+        except Exception:
+            old = None
+    step = exchange.parse_timeframe(timeframe) * 1000
+    if old is not None and len(old) >= min(limit, 50):
+        last_ms = int(old.index[-1].timestamp() * 1000)
+        missing = int((exchange.milliseconds() - last_ms) // step) + 2
+        if missing <= 0:
+            return old.tail(limit)
+        if missing < limit and len(old) >= limit * 0.98:
+            new = fetch_candles(exchange, symbol, timeframe, missing)
+            df = pd.concat([old, new])
+            df = df[~df.index.duplicated(keep="last")].sort_index().tail(max(limit, len(old)))
+            p.parent.mkdir(parents=True, exist_ok=True)
+            df.to_pickle(p)
+            return df.tail(limit)
+    df = fetch_candles(exchange, symbol, timeframe, limit)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    df.to_pickle(p)
+    return df

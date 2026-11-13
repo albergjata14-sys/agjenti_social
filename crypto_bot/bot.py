@@ -335,6 +335,30 @@ def run_team_cycle(exchange, base_cfg, rec, tournament: bool = True) -> dict:
     return team
 
 
+def ensure_research(cfg):
+    """Nis analistin e vazhdueshëm si proces më vete nëse nuk po punon (dhe e rinis nëse ka rënë)."""
+    import subprocess
+    import sys
+    from dataclasses import asdict
+
+    from .research import is_alive, status
+
+    st = status(cfg)
+    if st and is_alive(cfg, st):
+        return
+    started = getattr(ensure_research, "_last", 0)
+    if time.time() - started < 600:        # i dhamë kohë të nisë; mos e nis dy herë
+        return
+    ensure_research._last = time.time()
+    conf = cfg.state_file.replace(".json", "_analist_config.json")
+    Path(conf).write_text(json.dumps(asdict(cfg), indent=2))
+    flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+    with open("crypto_bot_analist.log", "a", encoding="utf-8") as out:
+        subprocess.Popen([sys.executable, "-m", "crypto_bot", "analist", "--vazhdimisht", "--config", conf,
+                          "--me-ekipin", cfg.state_file], stdout=out, stderr=subprocess.STDOUT, creationflags=flags)
+    log("Analisti i vazhdueshëm u nis në sfond (shih crypto_bot_analist.log).")
+
+
 def run_team_forever(exchange, base_cfg, tournament: bool = True):
     """Tregtari i ekipit: rifreskon rekomandimin e analistit kur vjetrohet dhe luan strategjitë e miratuara."""
     from .analyst import analyze_market, load_recommendation
@@ -367,7 +391,9 @@ def run_team_forever(exchange, base_cfg, tournament: bool = True):
                     log(f"Raporti i ditës dështoi: {e}")
                 today = now_day
             rec = load_recommendation(base_cfg)
-            if not rec or time.time() - rec.get("ts", 0) > base_cfg.analyst_hours * 3600:
+            if base_cfg.research:
+                ensure_research(base_cfg)        # analisti punon më vete; tregtari vetëm lexon rekomandimin
+            elif not rec or time.time() - rec.get("ts", 0) > base_cfg.analyst_hours * 3600:
                 try:
                     rec = analyze_market(exchange, base_cfg, log=log)
                     text = (f"🧠 Analisti: {'pushim, asnjë strategji e miratuar' if rec['action'] == 'pause' else 'miratoi ' + ', '.join(rec['approved'])}")

@@ -16,3 +16,5 @@ crypto_bot_alerts.json
 *.db
 *.db-wal
 *.db-shm
+crypto_bot_cache/
+crypto_bot_*.log

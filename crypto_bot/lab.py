@@ -20,10 +20,12 @@ SPACE = {
     "momentum": {"timeframe": ["1h", "4h"], "momentum_days": [3.0, 5.0, 7.0, 10.0, 14.0, 21.0, 30.0],
                  "momentum_min_pct": [0.0, 2.0, 5.0, 10.0], "momentum_ema": [50, 100, 200],
                  "stop_loss_pct": [4.0, 6.0, 8.0, 12.0], "take_profit_pct": [0.0, 0.0, 10.0, 20.0],
-                 "allow_short": [True, False]},
+                 "allow_short": [True, False], "trailing_stop_pct": [0.0, 0.0, 5.0, 10.0],
+                 "momentum_daily_filter": [False, True], "daily_trend_ema": [20, 50], "scan_top_n": [10, 20, 30]},
     "breakout": {"timeframe": ["1h", "4h"], "breakout_entry": [20, 30, 55, 100], "breakout_exit": [10, 20, 40],
                  "trend_ema": [100, 200], "daily_trend_ema": [0, 20, 50], "stop_loss_pct": [4.0, 6.0, 8.0, 12.0],
-                 "take_profit_pct": [0.0, 0.0, 10.0, 20.0], "allow_short": [False, True]},
+                 "take_profit_pct": [0.0, 0.0, 10.0, 20.0], "allow_short": [False, True],
+                 "trailing_stop_pct": [0.0, 0.0, 5.0, 10.0], "scan_top_n": [10, 20, 30]},
 }
 FIELDS = {k for space in SPACE.values() for k in space} | {"strategy"}
 
@@ -35,8 +37,11 @@ def strategy_id(overrides: dict) -> str:
 def describe(o: dict) -> str:
     side = "lart+poshtë" if o.get("allow_short") else "vetëm blerje"
     tp = f", fitim {o['take_profit_pct']:g}%" if o.get("take_profit_pct") else ""
+    tp += f", stop ndjekës {o['trailing_stop_pct']:g}%" if o.get("trailing_stop_pct") else ""
+    tp += f", {o['scan_top_n']} monedha" if o.get("scan_top_n", 20) != 20 else ""
     if o["strategy"] == "momentum":
-        core = (f"momentum {o['momentum_days']:g}d, prag {o['momentum_min_pct']:g}%, EMA{o['momentum_ema']}")
+        core = (f"momentum {o['momentum_days']:g}d, prag {o['momentum_min_pct']:g}%, EMA{o['momentum_ema']}"
+                + (f", trend ditor EMA{o['daily_trend_ema']}" if o.get("momentum_daily_filter") else ""))
     else:
         core = (f"thyerje {o['breakout_entry']}/{o['breakout_exit']}, EMA{o['trend_ema']}, "
                 f"ditor {'pa' if not o['daily_trend_ema'] else 'EMA' + str(o['daily_trend_ema'])}")
@@ -50,9 +55,11 @@ def random_overrides(rng: random.Random) -> dict:
 
 def complete(o: dict, rng: random.Random) -> dict:
     """Plotëson parametrat që mungojnë (p.sh. kur prindi është një strategji bazë)."""
+    defaults = {"timeframe": "4h", "scan_top_n": 20, "trailing_stop_pct": 0.0, "momentum_daily_filter": False,
+                "daily_trend_ema": 50}
     full = {"strategy": o["strategy"]}
     for k, v in SPACE[o["strategy"]].items():
-        full[k] = o.get(k, v[0] if k != "timeframe" else "4h")
+        full[k] = o.get(k, defaults.get(k, v[0]))
     return full
 
 
@@ -82,15 +89,27 @@ def run_lab(frames_by_tf: dict, base_cfg, n: int = 24, seed=None, test_days: int
     cands = [{"id": sid, "name": describe(o), "overrides": o} for sid, o in children.items()]
     log(f"Laboratori po provon {len(cands)} strategji të reja...")
     rows = evaluate(frames_by_tf, base_cfg, cands, test_days=test_days)
-    n_turne = len(memory.strategies(base_cfg, ["turne"]))
-    for r in sorted((r for r in rows if "test" in r), key=lambda r: -r["test"]["return_pct"]):
-        status = "provuar"
-        if r["eligible"] and n_turne < base_cfg.max_evolved:
-            status, n_turne = "turne", n_turne + 1
-        memory.upsert_strategy(base_cfg, r["id"], r["name"], r["overrides"], "laboratori", status,
+    for r in rows:
+        if "test" not in r:
+            continue
+        memory.upsert_strategy(base_cfg, r["id"], r["name"], r["overrides"], "laboratori", "provuar",
                                r["train"]["return_pct"], r["test"]["return_pct"], r["test"]["drawdown_pct"],
-                               r["test"]["trades"], "kaloi në turne" if status == "turne" else "")
+                               r["test"]["trades"], "kaloi të dyja periudhat" if r["eligible"] else "")
+    fill_tournament(base_cfg)
     return rows
+
+
+def fill_tournament(base_cfg) -> list:
+    """Vendet e lira në turne u jepen strategjive të provuara me rezultatin më të mirë në kontroll."""
+    free = base_cfg.max_evolved - len(memory.strategies(base_cfg, ["turne"]))
+    if free <= 0:
+        return []
+    waiting = [s for s in memory.strategies(base_cfg, ["provuar"])
+               if (s["train"] or 0) > 0 and (s["test"] or 0) > 0 and (s["test_trades"] or 0) >= 8]
+    chosen = sorted(waiting, key=lambda s: -s["test"])[:free]
+    for s in chosen:
+        memory.set_status(base_cfg, s["id"], "turne", "hyri në turne")
+    return chosen
 
 
 def review_tournament(base_cfg, forward: dict, now=None) -> list:
@@ -108,4 +127,10 @@ def review_tournament(base_cfg, forward: dict, now=None) -> list:
         elif s["status"] == "turne" and days >= base_cfg.promote_days and f["trades"] >= 15 and f["return_pct"] > 0:
             memory.set_status(base_cfg, s["id"], "ekip", f"fitoi {f['return_pct']:+.1f}% në {days:.0f} ditë turne")
             changes.append((s["name"], "ekip"))
+        elif s["status"] == "turne" and days >= base_cfg.tournament_days:
+            memory.set_status(base_cfg, s["id"], "hedhur",
+                              f"pa fitim të qartë pas {days:.0f} ditësh ({f['return_pct']:+.1f}%, {f['trades']} tregti)")
+            changes.append((s["name"], "hedhur"))
+    if changes:
+        fill_tournament(base_cfg)
     return changes

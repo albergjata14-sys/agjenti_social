@@ -11,7 +11,7 @@ import numpy as np
 import pandas as pd
 import streamlit as st
 
-from . import analyst, futures, journal, memory, notify, sentiment
+from . import analyst, futures, journal, memory, notify, radar, research, sentiment
 from .backtest import backtest
 from .bot import is_running, stop_file
 from .broker import Broker
@@ -592,10 +592,68 @@ def tab_robot(cfg, exchange):
             st.dataframe(d[[c for c in cols if c in d]].rename(columns=cols).head(60), width="stretch", hide_index=True)
 
 
+def _ago(ts) -> str:
+    if not ts:
+        return "ende jo"
+    m = int((time.time() - ts) // 60)
+    return "tani" if m < 1 else f"para {m} min" if m < 120 else f"para {m // 60} orësh"
+
+
+def _research_panel(cfg):
+    """Gjendja e analistit të vazhdueshëm dhe radari i monedhave në trend."""
+    rs = research.status(cfg)
+    alive = bool(rs) and research.is_alive(cfg, rs)
+    with st.container(border=True):
+        st.markdown(f"**Analisti i vazhdueshëm** · {'🟢 po punon' if alive else '⚪ nuk po punon'}"
+                    + (f" · {rs.get('status', '')}" if alive else ""))
+        if rs:
+            m = st.columns(3)
+            m[0].metric("Strategji të provuara", rs.get("tested_total", 0))
+            m[1].metric("Fituan në të dyja periudhat", rs.get("passed_total", 0))
+            m[2].metric("Në turne tani", len(memory.strategies(cfg, ["turne"])) if Path(cfg.memory_file).exists() else 0)
+            st.caption(f"Grupi i fundit i strategjive: {_ago(rs.get('last_lab'))} · rivlerësimi i ekipit: "
+                       f"{_ago(rs.get('last_rec'))} · radari: {_ago(rs.get('last_radar'))}")
+        if not alive:
+            st.caption("Niset vetë bashkë me ekipin (skeda Roboti → Ekipi), ose me "
+                       "`python -m crypto_bot analist --vazhdimisht`.")
+            if st.button("Nis analistin e vazhdueshëm", key="start_research"):
+                conf = cfg.state_file.replace(".json", "_analist_config.json")
+                Path(conf).write_text(json.dumps(asdict(cfg), indent=2))
+                with open("crypto_bot_analist.log", "a", encoding="utf-8") as out:
+                    subprocess.Popen([sys.executable, "-m", "crypto_bot", "analist", "--vazhdimisht", "--config", conf],
+                                     stdout=out, stderr=subprocess.STDOUT,
+                                     creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+                st.toast("Analisti po niset; radari i parë del brenda pak minutash.")
+    rd = radar.load(cfg)
+    if not rd:
+        return
+    st.markdown(f"**Radari: monedhat në trend tani** · {rd['scanned']} monedha të para {_ago(rd['ts'])}")
+    c = st.columns(2)
+    for col, side, title in ((c[0], "up", "📈 Në trend rritës"), (c[1], "down", "📉 Në trend rënës")):
+        rows = rd[side][:8]
+        col.markdown(title)
+        if not rows:
+            col.caption("Asnjë monedhë me trend të qartë.")
+            continue
+        col.dataframe(pd.DataFrame([{"Monedha": r["symbol"].split("/")[0], "14 ditë %": r["m14"], "7 ditë %": r["m7"],
+                                     "24h %": r["change24"], "Volumi ×": r["volume_x"]} for r in rows]),
+                      hide_index=True, width="stretch", column_config={
+                          "14 ditë %": st.column_config.NumberColumn(format="%+.1f"),
+                          "7 ditë %": st.column_config.NumberColumn(format="%+.1f"),
+                          "24h %": st.column_config.NumberColumn(format="%+.2f"),
+                          "Volumi ×": st.column_config.NumberColumn(help="Volumi i 24 orëve kundrejt mesatares ditore të javës")})
+    if rd.get("extreme"):
+        st.caption("Lëvizje ekstreme (mbi 80% në 14 ditë, shpesh monedha që po shemben), jashtë radarit: "
+                   + ", ".join(x.split("/")[0] for x in rd["extreme"]))
+    st.caption("Radari informon; tregtari tregton monedhat më të tregtuara (10, 20 ose 30, sipas strategjisë). "
+               "Në 27 muaj të dhëna, kalimi nga 20 në 40 monedha i rriti rëniet e të tri strategjive kryesore.")
+
+
 def tab_analyst(cfg, exchange):
     st.caption("Analisti provon disa strategji mbi monedhat më të tregtuara: si do të kishin dalë në një periudhë më "
                "të vjetër (mësimi) dhe në ditët e fundit (kontrolli). Miraton ato që fituan në të dyja; tregtari i "
                "luan njëkohësisht. Kur asnjë nuk fiton, rekomandon pushim.")
+    _research_panel(cfg)
     rec = analyst.load_recommendation(cfg)
     c = st.columns([1, 1])
     n = c[0].select_slider("Sa monedha", [10, 20, 30], 20, key="analyst_n")
@@ -695,7 +753,7 @@ def tab_memory(cfg):
     st.dataframe(pd.DataFrame([{
         "Gjendja": names.get(s["status"], s["status"]), "Strategjia": s["name"], "Mësimi %": s["train"],
         "Kontrolli %": s["test"], "Turne %": (fwd.get(s["id"]) or {}).get("return_pct"),
-        "Tregti turne": (fwd.get(s["id"]) or {}).get("trades", "–"), "Shënim": s["note"] or ""}
+        "Tregti turne": (fwd.get(s["id"]) or {}).get("trades"), "Shënim": s["note"] or ""}
         for s in sorted(labs, key=lambda s: (["ekip", "turne", "provuar", "hedhur"].index(s["status"])
                                              if s["status"] in names else 9, -(s["test"] or -999)))]),
         width="stretch", hide_index=True, column_config={

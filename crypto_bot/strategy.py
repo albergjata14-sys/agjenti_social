@@ -101,6 +101,9 @@ def signal_frame(df: pd.DataFrame, cfg, daily=None) -> pd.DataFrame:
         s["sell"] = m < 0
         s["short"] = (m < -cfg.momentum_min_pct) & (c < avg)
         s["cover"] = m > 0
+        if cfg.momentum_daily_filter:
+            s["buy"] = s["buy"] & s["daily_up"]
+            s["short"] = s["short"] & s["daily_down"]
     elif cfg.strategy == "breakout":
         s["buy"] = (c > s["breakout_high"]) & (c > s["trend_ema"]) & s["daily_up"]
         s["sell"] = c < s["breakout_low"]

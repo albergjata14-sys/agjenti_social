@@ -59,6 +59,9 @@ def main(argv=None):
                    help="nis: analisti miraton strategjitë dhe tregtari i luan të gjitha njëkohësisht (simulim)")
     p.add_argument("--pa-turne", action="store_true", help="nis --ekip: pa provën paralele të të gjitha strategjive")
     p.add_argument("--monedha", type=int, default=20, help="analist: sa monedha të përdoren")
+    p.add_argument("--vazhdimisht", action="store_true",
+                   help="analist: kërko pa ndalur (radar, strategji të reja, rivlerësim) dhe informo tregtarin")
+    p.add_argument("--me-ekipin", dest="parent_state", help=argparse.SUPPRESS)
     p.add_argument("veprimi", nargs="?", choices=["shto", "lidh", "test"],
                    help="ditar: shto | njoftime: lidh (Telegram), test, shto (alarm çmimi)")
     p.add_argument("--mbi", type=float, help="njoftime shto: njofto kur çmimi ngjitet mbi këtë nivel")
@@ -113,6 +116,9 @@ def main(argv=None):
         for s in memory.strategies(cfg, ["turne", "ekip"]):
             print(f"  [{s['status']}] {s['name']}: mësimi {s['train']:+.1f}% | kontrolli {s['test']:+.1f}%")
         return
+    if a.komanda == "analist" and a.vazhdimisht:
+        from .research import research_forever
+        return research_forever(connect(cfg), cfg, log, parent_state=a.parent_state)
     if a.komanda == "analist":
         from .analyst import analyze_market
         rec = analyze_market(connect(cfg), cfg, n_symbols=a.monedha, log=log)

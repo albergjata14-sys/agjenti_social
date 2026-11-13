@@ -1106,3 +1106,65 @@ def test_lab_creates_tests_and_promotes(tmp_path):
     assert changes[a["name"]] == "ekip" and (not b2 or changes[b2["name"]] == "hedhur")
     assert {c["id"] for c in analyst.team_candidates(base)} >= {a["id"]}
     assert "evo_" in analyst.shadow_state_file(base, a)
+
+
+def test_cache_fetches_only_missing_candles(tmp_path, monkeypatch):
+    from crypto_bot import cache
+
+    monkeypatch.setattr(cache, "DIR", str(tmp_path / "c"))
+    ex = make_fake({"BTC/USDT": trend(400, 100, 0.001)})
+    calls = []
+    real = ex.fetch_ohlcv
+    ex.fetch_ohlcv = lambda *a, **k: calls.append(a) or real(*a, **k)
+    first = cache.candles(ex, "BTC/USDT", "1h", 300)
+    n = len(calls)
+    ex.now += 2 * 3600 * 1000                                  # kalojnë dy orë
+    second = cache.candles(ex, "BTC/USDT", "1h", 300)
+    assert len(first) == len(second) == 300 and second.index.is_unique
+    assert len(calls) - n <= 2                                  # vetëm kërkesa të vogla për qirinjtë e rinj
+    assert len(second) == 300
+
+
+def test_radar_and_research_round(tmp_path, monkeypatch):
+    from crypto_bot import analyst, cache, memory, radar, research
+
+    monkeypatch.setattr(cache, "DIR", str(tmp_path / "c"))
+    ex = make_fake({"UP/USDT": trend(400, 100, 0.003), "DN/USDT": trend(400, 100, -0.003),
+                    "FLAT/USDT": trend(400, 100, 0.0, 0.0005), "BTC/USDT": trend(400, 100, 0.001)})
+    ex.t = {s: {"quoteVolume": v, "last": 1.0, "percentage": 0.5}
+            for s, v in [("UP/USDT", 9), ("DN/USDT", 8), ("FLAT/USDT", 7), ("BTC/USDT", 10)]}
+    cfg = Config(lab_batch=4, max_evolved=2, daily_trend_ema=0, market_filter_symbol="")
+    rd, entered = radar.update(ex, cfg)
+    assert [r["symbol"] for r in rd["up"]][:1] == ["UP/USDT"] and [r["symbol"] for r in rd["down"]] == ["DN/USDT"]
+    assert {r["symbol"] for r in entered["up"]} >= {"UP/USDT"}
+    assert radar.update(ex, cfg)[1] == {"up": [], "down": []}            # pa ndryshime, pa njoftime të reja
+
+    # 250 ditë qirinj orarë: mjaftojnë për periudhën e mësimit dhe 120 ditët e kontrollit.
+    frames = {f"C{i}/USDT": (candles(trend(6000, 100, 0.0005, 0.006, seed=i)), None) for i in range(3)}
+    monkeypatch.setattr(research, "_frames", lambda ex, cfg, syms: {"4h": frames, "1h": frames})
+    st = research.research_once(ex, cfg, {}, log=lambda *_: None)
+    assert st["tested_total"] == 4 and st["last_lab"] and st["last_rec"] and st["last_radar"]
+    rec = analyst.load_recommendation(cfg)
+    assert rec and "approved" in rec and rec["lab_tested"] == 4
+    assert len(memory.strategies(cfg)) == 4 and len(memory.strategies(cfg, ["turne"])) <= 2
+    # Rrethi tjetër menjëherë: asgjë nuk i ka ardhur radha, asgjë nuk provohet.
+    st2 = research.research_once(ex, cfg, dict(st), log=lambda *_: None)
+    assert st2["tested_total"] == 4
+    later = research.research_once(ex, cfg, dict(st), log=lambda *_: None, now=st["last_lab"] + 11 * 60)
+    assert later["tested_total"] == 8
+    research._save(cfg, later)
+    assert research.is_alive(cfg) and research.status(cfg)["tested_total"] == 8
+
+
+def test_trailing_stop_in_portfolio_backtest():
+    from crypto_bot.backtest import portfolio_backtest
+
+    closes = np.r_[np.full(260, 100.0), np.linspace(100, 130, 30), np.linspace(130, 110, 30)]
+    frames = {"X/USDT": (candles(closes), None)}
+    base = dict(strategy="score", buy_threshold=-1000, sell_threshold=-2000, daily_trend_ema=0, market_filter_symbol="",
+                risk_per_trade_pct=0, position_size_pct=100, fee_pct=0, stop_loss_pct=50, max_open_positions=1)
+    plain = portfolio_backtest(frames, Config(**base))
+    trail = portfolio_backtest(frames, Config(**base, trailing_stop_pct=5))
+    t = trail["trade_list"][0]
+    assert t["reason"] == "stop-loss" and t["exit"] == pytest.approx(130 * 0.95, rel=0.01)   # mbyllet 5% nën majën
+    assert trail["end"] > plain["end"]

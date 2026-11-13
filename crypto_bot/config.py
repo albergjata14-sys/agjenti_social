@@ -21,6 +21,7 @@ class Config:
     momentum_days: float = 14.0        # mbi sa ditë matet lëvizja
     momentum_min_pct: float = 5.0      # lëvizja minimale (në %) për të hyrë
     momentum_ema: int = 100            # çmimi duhet të jetë mbi (long) ose nën (short) këtë mesatare
+    momentum_daily_filter: bool = False   # momentum: blerje vetëm me trend ditor rritës, short vetëm me rënës
     rotate: bool = True                # kur vendet janë plot, këmbe pozicionin më të dobët me një monedhë më të fortë
     rotate_margin_pct: float = 10.0    # sa më e fortë duhet të jetë monedha e re që të bëhet këmbimi
     breakout_entry: int = 55           # bli kur çmimi mbyllet mbi majën e kaq qirinjve të fundit
@@ -69,11 +70,19 @@ class Config:
     # --- analisti dhe turneu (shih crypto_bot/analyst.py) ---
     recommendation_file: str = "crypto_bot_recommendation.json"   # rekomandimi i fundit i analistit
     follow_analyst: bool = False       # tregtari përdor strategjinë që rekomandon analisti
-    analyst_hours: float = 12.0        # sa shpesh e rifreskon tregtari rekomandimin kur e ndjek analistin
+    analyst_hours: float = 4.0         # sa shpesh e rifreskon tregtari rekomandimin kur e ndjek analistin
     tournament: bool = False           # prova paralele me para demo e të gjitha strategjive kandidate
     memory_file: str = "crypto_bot_memory.db"   # kujtesa: çdo vendim, tregti, kapital dhe raport ditor ("" = pa)
-    lab_hours: float = 24.0            # sa shpesh laboratori krijon dhe provon strategji të reja (0 = i fikur)
+    lab_hours: float = 24.0            # pa analistin e vazhdueshëm: sa shpesh punon laboratori (0 = i fikur)
     lab_candidates: int = 24           # sa strategji të reja provon laboratori çdo herë
+    research: bool = True              # ekipi nis vetë analistin e vazhdueshëm (kërkim pa ndalur)
+    research_minutes: float = 10.0     # analisti i vazhdueshëm: sa shpesh provon një grup strategjish të reja
+    lab_batch: int = 8                 # sa strategji provon në çdo grup
+    research_symbols: int = 30         # sa monedha studion analisti (strategjitë zgjedhin 10, 20 ose 30 prej tyre)
+    radar_minutes: float = 10.0        # sa shpesh rifreskohet radari i monedhave në trend
+    radar_file: str = "crypto_bot_radar.json"
+    research_file: str = "crypto_bot_research.json"   # gjendja e analistit të vazhdueshëm
+    tournament_days: float = 30.0      # strategjia e laboratorit që s'ngrihet në ekip brenda kësaj kohe lë vendin
     max_evolved: int = 6               # sa strategji të laboratorit mund të jenë njëkohësisht në turne
     promote_days: float = 14.0         # sa ditë fitimi në turne duhen që një strategji e re të hyjë në ekip
     label: str = ""                    # emri i strategjisë në njoftime dhe regjistër (ekipi / turneu)

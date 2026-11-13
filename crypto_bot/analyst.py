@@ -39,7 +39,8 @@ CANDIDATES = [
                    "stop_loss_pct": 2.0}},
 ]
 STRATEGY_FIELDS = {"strategy", "timeframe", "allow_short", "momentum_days", "take_profit_pct", "stop_loss_pct",
-                   "momentum_min_pct", "momentum_ema", "breakout_entry", "breakout_exit", "trend_ema", "daily_trend_ema"}
+                   "momentum_min_pct", "momentum_ema", "breakout_entry", "breakout_exit", "trend_ema", "daily_trend_ema",
+                   "trailing_stop_pct", "momentum_daily_filter", "scan_top_n"}
 
 
 def _evolved(cfg, statuses):
@@ -68,15 +69,20 @@ def candidate_config(base, cand):
     return replace(base, **cand["overrides"]).validate()
 
 
-def load_frames(exchange, cfg, symbols, timeframe: str, candles: int) -> dict:
-    """{simboli: (qirinjtë, ditorët)} vetëm për monedhat me histori të plotë."""
+def load_frames(exchange, cfg, symbols, timeframe: str, candles: int, fetch=None) -> dict:
+    """{simboli: (qirinjtë, ditorët)} vetëm për monedhat me histori të plotë, sipas renditjes së volumit.
+
+    `fetch(exchange, simboli, intervali, sasia)`: si merren qirinjtë (parazgjedhur nga platforma; analisti i
+    vazhdueshëm përdor memorien në disk që merr vetëm qirinjtë e rinj)."""
+    fetch = fetch or fetch_candles
     frames = {}
-    tf_cfg = replace(cfg, timeframe=timeframe)
     for sym in symbols:
         try:
-            df = fetch_candles(exchange, sym, timeframe, candles)
+            df = fetch(exchange, sym, timeframe, candles)
             if len(df) >= candles * 0.98:
-                frames[sym] = (df, fetch_daily(exchange, sym, tf_cfg, df))
+                days = (df.index[-1] - df.index[0]).days + 160
+                daily = df if timeframe == "1d" else fetch(exchange, sym, "1d", days)
+                frames[sym] = (df, daily)
         except Exception:
             continue
     return frames
@@ -103,8 +109,10 @@ def evaluate(frames_by_tf: dict, base_cfg, candidates=CANDIDATES, test_days: int
     rows = []
     for cand in candidates:
         cfg = candidate_config(base_cfg, cand)
-        frames = frames_by_tf.get(cfg.timeframe) or {}
-        market = frames.get(cfg.market_filter_symbol) if cfg.market_filter_symbol else None
+        all_frames = frames_by_tf.get(cfg.timeframe) or {}
+        market = all_frames.get(cfg.market_filter_symbol) if cfg.market_filter_symbol else None
+        # Tregtohen vetëm `scan_top_n` monedhat më të tregtuara (renditja e ngarkimit është sipas volumit).
+        frames = dict(list(all_frames.items())[:cfg.scan_top_n])
         if not frames:
             rows.append({**cand, "error": f"pa të dhëna {cfg.timeframe}"})
             continue

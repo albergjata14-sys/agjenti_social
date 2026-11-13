@@ -155,6 +155,21 @@ ditë), kalimi te strategjia që kishte fituar më shumë së fundmi dha +2.6%; 
 miratuarave njëherësh dha +12.7%; të gjitha pa filtër +6.6%. Strategjitë e mira të mbajtura fikse dhanë
 +13% deri +17%, por kjo dihet vetëm pas faktit. Ekipi punon vetëm në simulim.
 
+### Analisti i vazhdueshëm dhe radari
+
+Kur nis ekipi (`nis --ekip` ose `start_ekipi.bat`), nis vetë në sfond edhe **analisti i vazhdueshëm**
+(`python -m crypto_bot analist --vazhdimisht`, regjistri te `crypto_bot_analist.log`). Ai nuk ndalet:
+
+- çdo `radar_minutes` (10): **radari** i 50 monedhave më të tregtuara, me lëvizjen 7 dhe 14 ditore dhe
+  volumin; njofton kur një monedhë hyn ndër 5 më të fortat lart ose poshtë. Lëvizjet mbi 80% mbahen veçmas;
+- çdo `research_minutes` (10): merr vetëm qirinjtë e rinj (historia ruhet te `crypto_bot_cache/`) dhe provon
+  `lab_batch` (8) strategji të reja, rreth 1,000 në ditë. Hapësira e kërkimit përfshin edhe stop-in ndjekës,
+  filtrin e trendit ditor për momentum dhe sa monedha tregtohen (10, 20 ose 30);
+- çdo `analyst_hours` (4): shqyrton turneun dhe rishkruan rekomandimin që lexon tregtari.
+
+Sa monedha tregtohen e vendos laboratori me prova: në 27 muaj të dhëna, kalimi nga 20 në 40 monedha i rriti
+rëniet e të tri strategjive kryesore (p.sh. momentum aktiv +72% / rënia 30% me 20, +36% / 42% me 40).
+
 ### Kujtesa, laboratori dhe puna 24/7
 
 - **Kujtesa** (`crypto_bot_memory.db`, SQLite): çdo vendim me arsyen, çdo tregti e mbyllur, kapitali i çdo

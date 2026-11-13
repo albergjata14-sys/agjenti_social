@@ -180,7 +180,7 @@ def portfolio_backtest(frames: dict, cfg, market=None) -> dict:
                 break
             sl, tp = exit_prices(cfg, o[i, j], stop_pct, side)
             pos[j] = {"i": i, "side": side, "entry": o[i, j], "qty": cost * (1 - fee) / o[i, j], "cost": cost,
-                      "sl": sl, "tp": tp}
+                      "sl": sl, "tp": tp, "best": o[i, j]}
             cash -= cost
         for j in list(pos):     # stop-i kontrollohet i pari: rasti më i keq kur preken të dy brenda një qiriri
             p, long = pos[j], pos[j]["side"] > 0
@@ -188,6 +188,14 @@ def portfolio_backtest(frames: dict, cfg, market=None) -> dict:
                 close(j, i, min(o[i, j], p["sl"]) if long else max(o[i, j], p["sl"]), "stop-loss")
             elif p["tp"] and ((h[i, j] >= p["tp"]) if long else (l[i, j] <= p["tp"])):
                 close(j, i, max(o[i, j], p["tp"]) if long else min(o[i, j], p["tp"]), "take-profit")
+            elif cfg.trailing_stop_pct:      # stop-i ndjek çmimin më të mirë (pas qiririt, pa parë të ardhmen)
+                t = cfg.trailing_stop_pct / 100
+                if long:
+                    p["best"] = max(p["best"], h[i, j])
+                    p["sl"] = max(p["sl"], p["best"] * (1 - t))
+                else:
+                    p["best"] = min(p["best"], l[i, j])
+                    p["sl"] = min(p["sl"], p["best"] * (1 + t))
         equity.append(cash + sum(value(p, c[i, j] if not np.isnan(c[i, j]) else p["entry"]) for j, p in pos.items()))
 
     eq = pd.Series(equity, index=idx[start:])
