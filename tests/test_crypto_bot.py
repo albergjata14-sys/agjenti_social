@@ -1168,3 +1168,44 @@ def test_trailing_stop_in_portfolio_backtest():
     t = trail["trade_list"][0]
     assert t["reason"] == "stop-loss" and t["exit"] == pytest.approx(130 * 0.95, rel=0.01)   # mbyllet 5% nën majën
     assert trail["end"] > plain["end"]
+
+
+def test_telegram_username_and_errors(monkeypatch):
+    from crypto_bot import notify
+
+    sent = []
+
+    class R:
+        def __init__(self, body):
+            self.body, self.ok = body, body.get("ok", False)
+
+        def json(self):
+            return self.body
+
+    updates = {"ok": True, "result": [
+        {"message": {"chat": {"id": 111, "username": "dikush"}, "from": {"username": "dikush"}}},
+        {"message": {"chat": {"id": 777, "username": "Alber_Alb"}, "from": {"username": "Alber_Alb"}}}]}
+    monkeypatch.setattr(notify.requests, "get", lambda url, timeout: R(updates))
+
+    def post(url, json, timeout):
+        sent.append(json)
+        if json["chat_id"] == "403":
+            return R({"ok": False, "error_code": 403, "description": "Forbidden: bot was blocked by the user"})
+        return R({"ok": True})
+    monkeypatch.setattr(notify.requests, "post", post)
+    notify._resolved.clear()
+
+    # Emri i llogarisë kthehet vetë në chat_id numerik nga mesazhet që i janë dërguar robotit.
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "1:AA")
+    monkeypatch.setenv("TELEGRAM_CHAT_ID", "@alber_alb")
+    assert notify.telegram_settings() == ("1:AA", "777")
+    assert notify.telegram_check() == (True, "") and sent[-1]["chat_id"] == "777"
+    assert notify.telegram_find_chat("1:AA") == "777" and notify.telegram_find_chat("1:AA", "dikush") == "111"
+    # Emër që nuk gjendet: shpjegim i qartë në vend të dështimit pa arsye.
+    notify._resolved.clear()
+    monkeypatch.setenv("TELEGRAM_CHAT_ID", "askush")
+    ok, why = notify.telegram_check()
+    assert not ok and "duhet të jetë numër" in why
+    monkeypatch.setenv("TELEGRAM_CHAT_ID", "403")
+    ok, why = notify.telegram_check()
+    assert not ok and "Start" in why and "blocked" in why

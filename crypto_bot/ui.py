@@ -462,13 +462,31 @@ def tab_market(cfg, exchange):
 
 
 def tab_alerts(cfg, symbol, price):
-    tg = notify.telegram_settings()
+    raw = notify._raw_settings()
     st.markdown("**Njoftime në telefon (Telegram)**")
-    if tg:
+    if raw:
+        token, chat = raw
         c = st.columns([2, 1])
-        c[0].success("Telegram-i është lidhur.")
+        c[0].info("Tokeni dhe TELEGRAM_CHAT_ID janë vendosur." + ("" if notify.is_numeric_chat(chat) else
+                  f" Kujdes: “{chat}” nuk është numër; Telegram-i kërkon chat_id numerik."))
         if c[1].button("Dërgo një mesazh provë", width="stretch"):
-            st.toast("Mesazhi u dërgua." if notify.telegram_send("✅ Prova nga paneli i robotit.") else "Mesazhi nuk shkoi.")
+            ok, why = notify.telegram_check()
+            (st.success if ok else st.error)("Mesazhi u dërgua. Shiko Telegram-in." if ok else why)
+        if st.button("🔎 Gjej chat_id automatikisht"):
+            try:
+                found = notify.telegram_find_chat(token, None if notify.is_numeric_chat(chat) else chat) \
+                    or notify.telegram_find_chat(token)
+            except Exception as e:
+                found, err = None, str(e)
+            else:
+                err = ""
+            if found:
+                st.success(f"chat_id yt është **{found}**. Te Streamlit Cloud → Settings → Secrets vendos:")
+                st.code(f'TELEGRAM_CHAT_ID = "{found}"', language="toml")
+                st.caption("Ruaje, prit pak që aplikacioni të riniset, pastaj provo prapë mesazhin.")
+            else:
+                st.warning("Nuk u gjet asnjë mesazh. Hap robotin tënd në Telegram, shtyp Start ose shkruaji "
+                           "“përshëndetje”, pastaj shtyp prapë këtë buton." + (f" ({err})" if err else ""))
     else:
         st.info("Telegram-i nuk është lidhur ende. Njoftimet shfaqen vetëm këtu në panel.")
     with st.expander("Si ta lidhësh Telegram-in"):
@@ -477,7 +495,8 @@ def tab_alerts(cfg, symbol, price):
             "2. Hap robotin tënd të ri dhe shtyp **Start**.\n"
             "3. **Në kompjuter:** `python -m crypto_bot njoftime lidh` (të kërkon tokenin dhe gjen vetë bisedën).\n"
             "4. **Në Streamlit Cloud:** te aplikacioni → Settings → Secrets shto\n"
-            "   `TELEGRAM_BOT_TOKEN = \"...\"` dhe `TELEGRAM_CHAT_ID = \"...\"`.\n\n"
+            "   `TELEGRAM_BOT_TOKEN = \"...\"` dhe `TELEGRAM_CHAT_ID = \"123456789\"` (numri, jo emri i llogarisë; "
+            "e gjen me butonin “Gjej chat_id”).\n\n"
             "Mos e ngjit tokenin në biseda apo në kod: kushdo që e ka mund të dërgojë mesazhe në emër të robotit.")
     st.markdown("**Çfarë njoftohet**")
     st.markdown(f"- çdo hyrje dhe dalje e robotit\n- kur një monedhë e ndjekur merr sinjal të ri\n"

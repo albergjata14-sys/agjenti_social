@@ -16,8 +16,7 @@ TELEGRAM_FILE = "crypto_bot_telegram.json"   # tokeni dhe chat_id i ruajtur në 
 API = "https://api.telegram.org/bot{token}/{method}"
 
 
-def telegram_settings():
-    """(token, chat_id) nga variablat e mjedisit, sekretet e Streamlit ose skedari lokal; None nëse mungon."""
+def _raw_settings():
     token, chat = os.environ.get("TELEGRAM_BOT_TOKEN"), os.environ.get("TELEGRAM_CHAT_ID")
     if not (token and chat):
         try:
@@ -30,33 +29,83 @@ def telegram_settings():
     if not (token and chat) and Path(TELEGRAM_FILE).exists():
         saved = json.loads(Path(TELEGRAM_FILE).read_text())
         token, chat = token or saved.get("token"), chat or saved.get("chat_id")
-    return (str(token), str(chat)) if token and chat else None
+    return (str(token).strip(), str(chat).strip()) if token and chat else None
 
 
-def telegram_send(text: str, settings=None) -> bool:
+def is_numeric_chat(chat: str) -> bool:
+    return chat.lstrip("-").isdigit()
+
+
+_resolved = {}
+
+
+def telegram_settings():
+    """(token, chat_id) nga variablat e mjedisit, sekretet e Streamlit ose skedari lokal; None nëse mungon.
+
+    Telegram-i dërgon vetëm te një chat_id numerik. Nëse në vend të tij është shkruar emri i llogarisë
+    (p.sh. @emri), numri gjendet vetë nga mesazhet që i ke dërguar robotit.
+    """
+    raw = _raw_settings()
+    if not raw:
+        return None
+    token, chat = raw
+    if is_numeric_chat(chat):
+        return token, chat
+    if (token, chat) not in _resolved:
+        try:
+            _resolved[(token, chat)] = telegram_find_chat(token, username=chat)
+        except Exception:
+            _resolved[(token, chat)] = None
+    found = _resolved[(token, chat)]
+    return (token, found) if found else (token, chat)
+
+
+def telegram_check(text: str = "✅ Prova nga paneli i robotit.", settings=None):
+    """Dërgon një mesazh dhe kthen (u dërgua, shpjegimi i gabimit në shqip ose "")."""
+    raw = _raw_settings()
     settings = settings or telegram_settings()
     if not settings:
-        return False
+        return False, "Mungon tokeni ose TELEGRAM_CHAT_ID."
     token, chat = settings
+    if not is_numeric_chat(chat):
+        return False, (f"TELEGRAM_CHAT_ID duhet të jetë numër (p.sh. 123456789), jo emri i llogarisë “{chat}”. "
+                       "Hap robotin tënd në Telegram, shtyp Start ose shkruaji “përshëndetje”, pastaj shtyp "
+                       "“Gjej chat_id” këtu poshtë.")
     try:
         r = requests.post(API.format(token=token, method="sendMessage"),
                           json={"chat_id": chat, "text": text, "disable_web_page_preview": True}, timeout=10)
-        return r.ok and r.json().get("ok", False)
-    except requests.RequestException:
-        return False
+        body = r.json()
+    except (requests.RequestException, ValueError) as e:
+        return False, f"Telegram-i nuk u arrit: {e}"
+    if body.get("ok"):
+        return True, ""
+    desc = body.get("description", "")
+    hint = {401: "Tokeni është i gabuar: kopjoje prapë të plotë nga @BotFather.",
+            400: "Biseda nuk u gjet: kontrollo TELEGRAM_CHAT_ID dhe shtyp Start te roboti yt në Telegram.",
+            403: "Roboti nuk lejohet të të shkruajë: hap robotin në Telegram dhe shtyp Start (ose zhbllokoje)."}
+    return False, f"{hint.get(body.get('error_code'), 'Telegram-i e refuzoi mesazhin.')} ({desc})"
 
 
-def telegram_find_chat(token: str):
-    """chat_id i bisedës së fundit me robotin (përdoruesi duhet t'i ketë shkruar më parë)."""
+def telegram_send(text: str, settings=None) -> bool:
+    return telegram_check(text, settings)[0]
+
+
+def telegram_find_chat(token: str, username: str = None):
+    """chat_id i bisedës me robotin. Me `username` kërkohet pikërisht ajo llogari; përndryshe biseda e fundit.
+    Përdoruesi duhet t'i ketë shkruar robotit më parë (Telegram-i i ruan mesazhet rreth 24 orë)."""
     r = requests.get(API.format(token=token, method="getUpdates"), timeout=10)
-    r.raise_for_status()
     data = r.json()
     if not data.get("ok"):
         raise RuntimeError(data.get("description", "Telegram e refuzoi tokenin"))
+    want = (username or "").lstrip("@").lower()
     for upd in reversed(data.get("result", [])):
         msg = upd.get("message") or upd.get("edited_message") or upd.get("channel_post") or {}
-        if msg.get("chat", {}).get("id") is not None:
-            return str(msg["chat"]["id"])
+        chat = msg.get("chat", {})
+        if chat.get("id") is None:
+            continue
+        if want and want not in (str(chat.get("username", "")).lower(), str(msg.get("from", {}).get("username", "")).lower()):
+            continue
+        return str(chat["id"])
     return None
 
 
