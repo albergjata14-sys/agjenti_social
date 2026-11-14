@@ -1,6 +1,7 @@
 """Cikli kryesor i robotit: skanon tregun, analizon, hap dhe mbyll pozicione."""
 import json
 import time
+from dataclasses import replace
 from pathlib import Path
 from datetime import datetime, timezone
 
@@ -226,7 +227,7 @@ def run_cycle(exchange, broker, cfg) -> list:
             for kind, sym, info in actions:
                 text = notify.trade_message(kind, sym, info, cfg.quote)
                 image = None
-                if images and kind in ("BLI", "SHORT"):
+                if images and kind in ("BLI", "SHORT") and not cfg.label:   # ekipi: grafiku vjen me sinjalin e analistit
                     image = _trade_chart(exchange, cfg, sym, info, kind)
                 notify.emit(cfg, "tregti", sym, f"[{cfg.label}] {text}" if cfg.label else text, image=image)
         chart = None
@@ -304,19 +305,55 @@ _last_market = [0.0]
 
 
 def run_team_cycle(exchange, base_cfg, rec, tournament: bool = True) -> dict:
-    """Një cikël i ekipit: çdo strategji tregton me pjesën e saj të kapitalit (vetëm të miratuarat hapin
-    pozicione të reja), dhe turneu i provon të gjitha me gjithë kapitalin demo. Kthen gjendjen e përbashkët."""
-    from .analyst import team_candidates, team_config, tournament_candidates, tournament_config
+    """Një cikël i ekipit. Strategjitë aktive (të miratuara + provizore) tregtojnë, secila me pjesën e saj të
+    kapitalit; kur një strategji del nga lista dhe s'ka pozicione, kapitali i saj kthehet te "rezerva" dhe i
+    jepet strategjisë së re. Turneu i provon të gjitha me gjithë kapitalin demo. Kthen gjendjen e përbashkët."""
+    from .analyst import team_config, tournament_candidates, tournament_config
     from .broker import Broker
 
     cache = CycleCache(exchange)
-    approved = set((rec or {}).get("approved", []))
+    rec = rec or {}
+    approved, provisional = set(rec.get("approved", [])), set(rec.get("provisional", []))
+    active = approved | provisional
+    try:
+        prev = json.loads(Path(base_cfg.state_file).read_text())
+    except (OSError, ValueError):
+        prev = {}
+    pool = float(prev.get("pool", base_cfg.paper_balance))
     team = {"team": True, "live": False, "heartbeat": time.time(), "cash": 0.0, "positions": {}, "trades": [],
-            "members": [], "approved": sorted(approved), "recommendation": (rec or {}).get("name")}
-    members = team_candidates(base_cfg)
-    for cand in members:
-        cfg = team_config(base_cfg, cand, approved, len(members))
+            "members": [], "approved": sorted(approved), "provisional": sorted(provisional),
+            "recommendation": rec.get("name")}
+    cands = {c["id"]: c for c in tournament_candidates(base_cfg)}
+    sleeves = {cid for cid in cands if Path(team_config(base_cfg, cands[cid], approved).state_file).exists()}
+    # Kapitali i strategjive që nuk janë më aktive dhe s'kanë pozicione kthehet te rezerva.
+    for cid in list(sleeves - active):
+        path = Path(team_config(base_cfg, cands[cid], approved).state_file)
+        st = json.loads(path.read_text())
+        if not st.get("positions"):
+            pool += st.get("cash", 0.0)
+            team["trades"] += [{**t, "strategy": cands[cid]["name"]} for t in st.get("trades", [])]
+            path.unlink()
+            sleeves.discard(cid)
+    total = pool + sum(json.loads(Path(team_config(base_cfg, cands[c], approved).state_file).read_text())
+                       .get("last_equity", 0.0) for c in sleeves)
+    for cid in [c for c in cands if c in active and c not in sleeves]:
+        share = min(pool, total / max(1, base_cfg.max_active))
+        if share <= 0:
+            break
+        cfg = replace(team_config(base_cfg, cands[cid], approved, provisional=provisional), paper_balance=share)
+        Broker(cfg).save()
+        pool -= share
+        sleeves.add(cid)
+    team["pool"] = pool
+    team["trades"] += prev.get("retired_trades", [])
+    team["retired_trades"] = [t for t in team["trades"]]
+    for cid in sleeves:
+        cand = cands[cid]
+        cfg = team_config(base_cfg, cand, approved, provisional=provisional)
         broker = Broker(cfg)
+        cfg = replace(cfg, paper_balance=broker.state.get("start_balance", broker.state["cash"]))
+        broker.state.setdefault("start_balance", cfg.paper_balance)
+        broker.cfg = cfg
         try:
             run_cycle(cache, broker, cfg)
         except Exception as e:
@@ -328,11 +365,12 @@ def run_team_cycle(exchange, base_cfg, rec, tournament: bool = True) -> dict:
             key = sym if sym not in team["positions"] else f"{sym}#{cand['id']}"
             team["positions"][key] = {**pos, "strategy": cand["name"]}
         team["trades"] += [{**t, "strategy": cand["name"]} for t in st["trades"]]
-        team["members"].append({"id": cand["id"], "name": cand["name"], "approved": cand["id"] in approved,
-                                "capital": cfg.paper_balance, "equity": equity, "open": len(st["positions"]),
-                                "trades": len(st["trades"])})
+        team["members"].append({"id": cid, "name": cand["name"], "approved": cid in approved,
+                                "provisional": cid in provisional, "capital": st["start_balance"], "equity": equity,
+                                "open": len(st["positions"]), "trades": len(st["trades"])})
+    team["cash"] += pool
     team["trades"].sort(key=lambda t: t.get("closed", 0))
-    team["last_equity"] = sum(m["equity"] for m in team["members"])
+    team["last_equity"] = pool + sum(m["equity"] for m in team["members"])
     snapshot = [(m["name"], m["equity"], m["open"]) for m in team["members"]] + [("Ekipi", team["last_equity"],
                                                                                     len(team["positions"]))]
     if tournament:

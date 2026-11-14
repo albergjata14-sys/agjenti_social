@@ -3,6 +3,7 @@
 Kështu analisti mund të rifreskojë 30 monedha në tre intervale disa herë në orë pa e ngarkuar platformën.
 """
 import os
+import time
 from pathlib import Path
 
 import pandas as pd
@@ -31,14 +32,21 @@ def candles(exchange, symbol: str, timeframe: str, limit: int) -> pd.DataFrame:
         missing = int((exchange.milliseconds() - last_ms) // step) + 2
         if missing <= 0:
             return old.tail(limit)
-        if missing < limit and len(old) >= limit * 0.98:
+        # Tregjet e reja (p.sh. ari në MEXC) kanë më pak histori se sa kërkohet: ato rifreskohen plotësisht
+        # vetëm një herë në ditë, jo në çdo rreth.
+        short_ok = time.time() - old.attrs.get("short_history_at", 0) < 86400
+        if missing < limit and (len(old) >= limit * 0.98 or short_ok):
             new = fetch_candles(exchange, symbol, timeframe, missing)
             df = pd.concat([old, new])
+            attrs = dict(old.attrs)
             df = df[~df.index.duplicated(keep="last")].sort_index().tail(max(limit, len(old)))
+            df.attrs.update(attrs)
             p.parent.mkdir(parents=True, exist_ok=True)
             df.to_pickle(p)
             return df.tail(limit)
     df = fetch_candles(exchange, symbol, timeframe, limit)
+    if len(df) < limit * 0.98:
+        df.attrs["short_history_at"] = time.time()
     p.parent.mkdir(parents=True, exist_ok=True)
     df.to_pickle(p)
     return df

@@ -12,7 +12,8 @@ import time
 from pathlib import Path
 
 from . import cache, lab, memory, notify, radar
-from .analyst import choose, evaluate, forward_results, load_recommendation, team_candidates
+from .analyst import (FOCUS_TIMEFRAMES, candidate_config, choose, evaluate, forward_results, load_recommendation,
+                      tournament_candidates)
 from .data import top_symbols
 
 
@@ -39,10 +40,12 @@ def _save(cfg, st):
 def _frames(exchange, cfg, symbols):
     from .analyst import load_frames
 
-    frac = 0.2 if cfg.focus else 0.98       # në Fokus ari ka më pak histori (kontrata e re), por mbahet
-    return {"4h": load_frames(exchange, cfg, symbols, "4h", 5000, fetch=cache.candles, min_frac=frac),
-            "1h": load_frames(exchange, cfg, symbols, "1h", 5000 if cfg.focus else 4000, fetch=cache.candles,
-                              min_frac=frac)}
+    if cfg.focus:   # afate të shkurtra dhe të gjata: 15 minuta, 1 orë, 4 orë dhe 1 ditë
+        # ari ka më pak histori (kontrata e re), ndaj pranohen edhe historitë më të shkurtra
+        return {tf: load_frames(exchange, cfg, symbols, tf, n, fetch=cache.candles, min_frac=0.15)
+                for tf, n in FOCUS_TIMEFRAMES.items()}
+    return {"4h": load_frames(exchange, cfg, symbols, "4h", 5000, fetch=cache.candles),
+            "1h": load_frames(exchange, cfg, symbols, "1h", 4000, fetch=cache.candles)}
 
 
 def research_once(exchange, cfg, st: dict, log=print, now=None) -> dict:
@@ -59,6 +62,12 @@ def research_once(exchange, cfg, st: dict, log=print, now=None) -> dict:
                       radar_down=[r["symbol"] for r in rd["down"][:5]])
         except Exception as e:
             log(f"Radari dështoi: {e}")
+    if now - st.get("last_signals", 0) >= cfg.radar_minutes * 60:
+        try:
+            send_signals(exchange, cfg, st, log)
+        except Exception as e:
+            log(f"Sinjalet dështuan: {e}")
+        st["last_signals"] = now
     rec_due = now - st.get("last_rec", 0) >= cfg.analyst_hours * 3600 or not load_recommendation(cfg)
     lab_due = now - st.get("last_lab", 0) >= cfg.research_minutes * 60
     if not (rec_due or lab_due):
@@ -87,19 +96,83 @@ def research_once(exchange, cfg, st: dict, log=print, now=None) -> dict:
             notify.emit(cfg, "laboratori", "", msg)
             log(msg)
         old = load_recommendation(cfg) or {}
-        rows = evaluate(frames, cfg, team_candidates(cfg))
-        rec = choose(rows, forward_results(cfg))
+        rows = evaluate(frames, cfg, tournament_candidates(cfg))
+        rec = choose(rows, forward_results(cfg), cfg.max_active)
         rec.update({"time": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now)), "ts": now, "test_days": cfg.test_days,
                     "symbols": len(frames["4h"]), "results": rows, "forward": forward_results(cfg),
                     "lab_tested": st.get("tested_total", 0), "lab_passed": st.get("passed_total", 0)})
         Path(cfg.recommendation_file).write_text(json.dumps(rec, indent=2, ensure_ascii=False))
-        if set(rec["approved"]) != set(old.get("approved", [])):
-            notify.emit(cfg, "analist", "", "🧠 Analisti: " + ("pushim, asnjë strategji e miratuar" if rec["action"] == "pause"
-                                                              else "miratoi " + ", ".join(rec["approved"])))
+        names = {r["id"]: r["name"] for r in rows}
+        if (set(rec["approved"]), set(rec["provisional"])) != (set(old.get("approved", [])), set(old.get("provisional", []))):
+            lines = [f"✅ {names[i]}" for i in rec["approved"]] + [f"🟡 {names[i]} (provizore, gjysma e rrezikut)"
+                                                                   for i in rec["provisional"]]
+            notify.emit(cfg, "analist", "", "🧠 Analisti: " + ("pushim, asnjë strategji nuk fiton tani" if rec["action"] == "pause"
+                                                              else "strategjitë aktive:\n" + "\n".join(lines)))
         st["last_rec"] = now
-        log(f"Analisti: {rec['name']} | miratuar: {', '.join(rec['approved']) or 'asnjë'}")
+        log(f"Analisti: {rec['name']} | miratuar: {', '.join(rec['approved']) or 'asnjë'} | provizore: "
+            f"{', '.join(rec['provisional']) or 'asnjë'}")
     st["status"] = "në pritje të rrethit tjetër"
     return st
+
+
+def send_signals(exchange, cfg, st: dict, log=print) -> list:
+    """Për çdo strategji aktive dhe çdo treg: nëse ka sinjal të ri hyrjeje, dërgon njoftim me grafik
+    (hyrja, stop-loss, objektivi, rreziku). Çdo sinjal dërgohet një herë për qiri."""
+    from .config import display
+    from .data import fetch_candles, fetch_daily
+    from .snapshot import render
+    from .strategy import analyze
+
+    rec = load_recommendation(cfg)
+    if not rec or rec.get("action") == "pause":
+        return []
+    status = {i: "✅ e miratuar" for i in rec.get("approved", [])}
+    status.update({i: "🟡 provizore" for i in rec.get("provisional", [])})
+    cands = {c["id"]: c for c in tournament_candidates(cfg)}
+    seen = st.setdefault("sent_signals", [])
+    found = {}          # (tregu, drejtimi) → sinjalet e strategjive që pajtohen
+    for cid, label in status.items():
+        cand = cands.get(cid)
+        if not cand:
+            continue
+        ccfg = candidate_config(cfg, cand)
+        for sym in cfg.symbols:
+            try:
+                df = fetch_candles(exchange, sym, ccfg.timeframe, max(ccfg.candles, 600))
+                a = analyze(df, ccfg, sym, daily=fetch_daily(exchange, sym, ccfg, df))
+            except Exception:
+                continue
+            key = f"{cid}|{sym}|{a['time']}"
+            if a["signal"] not in ("BLI", "SHORT") or key in seen:
+                continue
+            seen.append(key)
+            found.setdefault((sym, a["signal"]), []).append((cid, cand, label, ccfg, df, a))
+    sent = []
+    images = notify.wants_images(cfg)
+    for (sym, signal), group in found.items():
+        # Një mesazh për treg dhe drejtim: plani i strategjisë më të mirë (të miratuarat para provizoreve).
+        cid, cand, label, ccfg, df, a = group[0]
+        p = a["plan"]
+        side = "🟢 BLERJE (long)" if signal == "BLI" else "🔻 SHITJE (short)"
+        risk = cfg.risk_per_trade_pct * (cfg.provisional_risk if cid in rec.get("provisional", []) else 1)
+        also = [g[1]["name"] for g in group[1:]]
+        text = (f"{side} {display(sym)} · {ccfg.timeframe}\n"
+                f"Hyrja {p['entry']:,.6g} · Stop-loss {p['stop_loss']:,.6g} (largësia {p['stop_pct']:.2f}%)"
+                + (f" · Objektivi {p['take_profit']:,.6g}" if p.get("take_profit") else " · fitimi i hapur (dalje me sinjal)")
+                + f"\nRreziku {risk:g}% e buxhetit · Strategjia: {cand['name']} ({label})"
+                + (f"\nPajtohen edhe: {'; '.join(also)}" if also else "")
+                + f"\nArsyeja: {a['signal_reason']}")
+        image = None
+        if images:
+            try:
+                image = render(df, f"{display(sym)} {ccfg.timeframe} · {side.split(' ', 1)[1]}", p["entry"],
+                               p["stop_loss"], p.get("take_profit"), 1 if signal == "BLI" else -1)
+            except Exception:
+                image = None
+        sent.append(notify.emit(cfg, "sinjal", sym, text, image=image))
+        log(f"Sinjal: {display(sym)} {signal} ({cand['name']}{', +' + str(len(also)) if also else ''})")
+    del seen[:-500]
+    return sent
 
 
 def research_forever(exchange, cfg, log=print, parent_state: str = None):

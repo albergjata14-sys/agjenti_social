@@ -998,7 +998,7 @@ def test_analyst_approves_and_team_trades(tmp_path):
     # Ekipi: çdo strategji ka pjesën e vet të kapitalit; vetëm të miratuarat hapin pozicione.
     cfg = Config(symbols=["UP/USDT"], candles=300, strategy="momentum", momentum_days=2, momentum_ema=20,
                  daily_trend_ema=0, market_filter_symbol="", state_file=str(tmp_path / "s.json"),
-                 log_file=str(tmp_path / "d.jsonl"), scan_top_n=2)
+                 log_file=str(tmp_path / "d.jsonl"), scan_top_n=2, max_active=2)
     ex = make_fake({"UP/USDT": trend(400, 100, 0.003), "DN/USDT": trend(400, 100, -0.003)})
     ex.t = {"UP/USDT": {"quoteVolume": 9}, "DN/USDT": {"quoteVolume": 5}}
     real = analyst.CANDIDATES
@@ -1008,12 +1008,24 @@ def test_analyst_approves_and_team_trades(tmp_path):
                                                                    "allow_short": False, "momentum_days": 2.0}}]
     try:
         team = run_team_cycle(ex, cfg, {"approved": ["m"], "name": "M"}, tournament=True)
+        members = {m["id"]: m for m in team["members"]}
+        assert set(members) == {"m"} and members["m"]["approved"]               # vetëm strategjitë aktive tregtojnë
+        assert members["m"]["open"] == 1 and members["m"]["capital"] == pytest.approx(500)   # 1000 / max_active 2
+        assert team["pool"] == pytest.approx(500)                                # pjesa tjetër pret në rezervë
+        assert team["last_equity"] == pytest.approx(1000, rel=0.01)
+        # "n" bëhet provizore: merr kapital nga rezerva dhe tregton me gjysmën e rrezikut.
+        team2 = run_team_cycle(ex, cfg, {"approved": ["m"], "provisional": ["n"], "name": "M"}, tournament=False)
+        m2 = {m["id"]: m for m in team2["members"]}
+        assert m2["n"]["provisional"] and m2["n"]["capital"] == pytest.approx(500, rel=0.01) and team2["pool"] == pytest.approx(0, abs=1)
+        # Kur "n" del nga lista dhe s'ka pozicione, kapitali i saj kthehet te rezerva.
+        nfile = tmp_path / "s_ekip_n.json"
+        st = json.loads(nfile.read_text())
+        st["positions"] = {}
+        nfile.write_text(json.dumps(st))
+        team3 = run_team_cycle(ex, cfg, {"approved": ["m"], "name": "M"}, tournament=False)
+        assert {m["id"] for m in team3["members"]} == {"m"} and not nfile.exists() and team3["pool"] > 0
     finally:
         analyst.CANDIDATES = real
-    members = {m["id"]: m for m in team["members"]}
-    assert members["m"]["approved"] and not members["n"]["approved"]
-    assert members["m"]["open"] == 1 and members["n"]["open"] == 0          # e pamiratuara nuk hyn
-    assert members["m"]["capital"] == pytest.approx(500)                      # 1000 / 2 strategji
     assert team["team"] and "UP/USDT" in team["positions"] and team["positions"]["UP/USDT"]["strategy"] == "M"
     assert json.loads((tmp_path / "s.json").read_text())["team"]
     with pytest.raises(RuntimeError):
@@ -1267,3 +1279,63 @@ def test_trade_chart_image():
 
     png = render(candles(trend(120, 100, 0.001)), "EURUSD 1h · BLERJE (long)", 100.0, 99.0, 102.0, 1)
     assert png[:8] == b"\x89PNG\r\n\x1a\n" and len(png) > 5000
+
+
+def test_provisional_approval():
+    from crypto_bot import analyst
+
+    def row(i, tr, te, re, n=20):
+        return {"id": i, "name": i, "overrides": {}, "train": {"return_pct": tr}, "test": {"return_pct": te, "drawdown_pct": 5,
+                "trades": n}, "recent": {"return_pct": re}, "eligible": tr > 0 and te > 0 and n >= 8,
+                "provisional": not (tr > 0 and te > 0) and te > 0 and re >= 0 and n >= 8, "test_from": "a", "test_to": "b"}
+    rows = [row("a", 5, 4, 1), row("b", -10, 9, 2), row("c", -10, 6, -1), row("d", -5, -2, 3), row("e", -3, 3, 0, n=4)]
+    rec = analyst.choose(rows, max_active=3)
+    assert rec["approved"] == ["a"] and rec["provisional"] == ["b"] and rec["action"] == "trade"
+    only_prov = analyst.choose([rows[1]])
+    assert only_prov["action"] == "trade" and only_prov["provisional"] == ["b"] and "Provizore" in only_prov["reason"]
+    assert analyst.choose([rows[2], rows[3]])["action"] == "pause"
+    cfg = Config(risk_per_trade_pct=0.5, provisional_risk=0.5)
+    c = analyst.team_config(cfg, {"id": "b", "name": "B", "overrides": {}}, set(), provisional={"b"})
+    assert c.risk_per_trade_pct == pytest.approx(0.25) and not c.pause_entries
+
+
+def test_lab_learns_from_past_tests():
+    import random
+
+    from crypto_bot import lab, memory
+
+    cfg = Config(focus=True)
+    good = {"strategy": "momentum", "timeframe": "4h", "stop_loss_atr": 2.0}
+    bad = {"strategy": "momentum", "timeframe": "15m", "stop_loss_atr": 1.0}
+    for i in range(6):
+        memory.upsert_strategy(cfg, f"g{i}", "g", {**good, "momentum_days": float(i)}, "laboratori", "provuar", 5, 20.0, 5, 30)
+        memory.upsert_strategy(cfg, f"b{i}", "b", {**bad, "momentum_days": float(i)}, "laboratori", "provuar", -5, -25.0, 5, 30)
+    stats = lab.learned(cfg)
+    assert stats[("momentum", "timeframe", '"4h"')] == (pytest.approx(20.0), 6)
+    rng = random.Random(0)
+    picks = [lab._pick(rng, "momentum", "timeframe", ["15m", "1h", "4h", "1d"], stats) for _ in range(2000)]
+    assert picks.count("4h") > 3 * picks.count("15m")               # mëson, por nuk e heq krejt alternativën
+    assert picks.count("15m") > 0 and picks.count("1h") > 0
+    ls = {(x["family"], x["param"]): x for x in lab.lessons(cfg)}
+    assert ls[("momentum", "timeframe")]["best"] == "4h" and ls[("momentum", "timeframe")]["worst"] == "15m"
+
+
+def test_signals_grouped_with_levels(monkeypatch):
+    from crypto_bot import analyst, notify, research
+
+    ex = make_fake({"UP/USDT": trend(700, 100, 0.003)})
+    ex.parse_timeframe = lambda tf: 14400
+    cfg = Config(focus=True, symbols=["UP/USDT"], daily_trend_ema=0, market_filter_symbol="")
+    cands = [{"id": "a", "name": "A", "overrides": {"strategy": "momentum", "momentum_days": 2.0, "timeframe": "4h",
+                                                     "stop_loss_atr": 2.0, "take_profit_r": 2.0}},
+             {"id": "b", "name": "B", "overrides": {"strategy": "momentum", "momentum_days": 3.0, "timeframe": "4h",
+                                                     "stop_loss_atr": 2.0}}]
+    monkeypatch.setattr(research, "tournament_candidates", lambda c: cands)
+    monkeypatch.setattr(research, "load_recommendation", lambda c: {"action": "trade", "approved": ["a"], "provisional": ["b"]})
+    st = {}
+    sent = research.send_signals(ex, cfg, st, log=lambda *_: None)
+    assert len(sent) == 1                                                  # dy strategji, një mesazh
+    text = sent[0]["text"]
+    assert "BLERJE (long) UP/USDT" in text and "Stop-loss" in text and "Objektivi" in text
+    assert "Strategjia: A (✅ e miratuar)" in text and "Pajtohen edhe: B" in text and "Rreziku 0.5%" in text
+    assert research.send_signals(ex, cfg, st, log=lambda *_: None) == []   # i njëjti qiri nuk dërgohet dy herë

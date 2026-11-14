@@ -595,7 +595,8 @@ def tab_robot(cfg, exchange):
     if state.get("team"):
         st.markdown("**Ekipi i strategjive**")
         st.dataframe(pd.DataFrame([{
-            "Strategjia": m["name"], "Miratuar nga analisti": "po" if m["approved"] else "jo",
+            "Strategjia": m["name"], "Statusi": "✅ e miratuar" if m["approved"] else
+            "🟡 provizore" if m.get("provisional") else "– del (mbyll pozicionet)",
             "Kapitali": m["capital"], "Tani": round(m["equity"], 2),
             "%": round((m["equity"] / m["capital"] - 1) * 100, 2), "Të hapura": m["open"], "Tregti": m["trades"]}
             for m in state["members"]]), width="stretch", hide_index=True,
@@ -680,6 +681,31 @@ def _research_panel(cfg):
                "Në 27 muaj të dhëna, kalimi nga 20 në 40 monedha i rriti rëniet e të tri strategjive kryesore.")
 
 
+def _lessons(cfg):
+    from . import lab
+
+    if not cfg.memory_file or not Path(cfg.memory_file).exists():
+        return
+    ls = lab.lessons(cfg)
+    if not ls:
+        return
+    names = {"timeframe": "Intervali", "momentum_days": "Ditët e lëvizjes", "momentum_min_pct": "Pragu %",
+             "momentum_ema": "Mesatarja", "stop_loss_atr": "Stop (×ATR)", "take_profit_r": "Objektivi (R)",
+             "allow_short": "Edhe short", "momentum_daily_filter": "Filtri ditor", "daily_trend_ema": "Mesatarja ditore",
+             "breakout_entry": "Thyerja (qirinj)", "breakout_exit": "Dalja (qirinj)", "trend_ema": "Mesatarja e trendit",
+             "trailing_stop_pct": "Stop ndjekës %", "scan_top_n": "Sa tregje", "stop_loss_pct": "Stop %",
+             "take_profit_pct": "Fitimi %"}
+    fam = {"momentum": "Momentum", "breakout": "Thyerje maje"}
+    with st.expander(f"Çfarë ka mësuar roboti nga {len(memory.strategies(cfg))} provat"):
+        st.dataframe(pd.DataFrame([{
+            "Strategjia": fam.get(x["family"], x["family"]), "Parametri": names.get(x["param"], x["param"]),
+            "Më e mira": str(x["best"]), "Mesatarja %": round(x["best_mean"], 1), "Prova": x["best_n"],
+            "Më e dobëta": str(x["worst"]), "Mesatarja e dobët %": round(x["worst_mean"], 1)} for x in ls]),
+            width="stretch", hide_index=True)
+        st.caption("Laboratori i zgjedh më shpesh vlerat që kanë dalë mirë, por vazhdon t'i provojë edhe të tjerat, "
+                   "sepse tregu ndryshon. Mesataret janë rezultati në periudhën e kontrollit.")
+
+
 def tab_analyst(cfg, exchange):
     st.caption("Analisti provon disa strategji mbi monedhat më të tregtuara: si do të kishin dalë në një periudhë më "
                "të vjetër (mësimi) dhe në ditët e fundit (kontrolli). Miraton ato që fituan në të dyja; tregtari i "
@@ -687,7 +713,9 @@ def tab_analyst(cfg, exchange):
     _research_panel(cfg)
     rec = analyst.load_recommendation(cfg)
     c = st.columns([1, 1])
-    n = c[0].select_slider("Sa monedha", [10, 20, 30], 20, key="analyst_n")
+    n = 5 if cfg.focus else c[0].select_slider("Sa monedha", [10, 20, 30], 20, key="analyst_n")
+    if cfg.focus:
+        c[0].markdown("**5 tregjet e Fokusit** · intervalet 15m, 1h, 4h, 1d")
     if c[1].button("🧠 Analizo tani", type="primary", width="stretch"):
         with st.spinner("Analisti po shkarkon historinë dhe po provon strategjitë (1–3 minuta)..."):
             rec = analyst.analyze_market(exchange, cfg, n_symbols=n, log=lambda *_: None)
@@ -707,14 +735,22 @@ def tab_analyst(cfg, exchange):
         if "error" in r:
             continue
         f = fwd_now.get(r["id"]) or fwd.get(r["id"]) or {}
-        rows.append({"Strategjia": r["name"], "Miratuar": "✅" if r["id"] in rec.get("approved", []) else "–",
+        state = ("✅ e miratuar" if r["id"] in rec.get("approved", []) else
+                 "🟡 provizore" if r["id"] in rec.get("provisional", []) else "–")
+        rows.append({"Strategjia": r["name"], "Statusi": state, "Interval": r["overrides"].get("timeframe", ""),
                      "Mësimi %": r["train"]["return_pct"], "Kontrolli %": r["test"]["return_pct"],
+                     "30 ditë %": (r.get("recent") or {}).get("return_pct"),
                      "Rënia maks. %": r["test"]["drawdown_pct"], "Tregti": r["test"]["trades"],
                      "Turne live %": f.get("return_pct"), "Tregti live": f.get("trades")})
     st.dataframe(pd.DataFrame(rows), width="stretch", hide_index=True, column_config={
         "Mësimi %": st.column_config.NumberColumn(format="%+.1f"),
         "Kontrolli %": st.column_config.NumberColumn(format="%+.1f"),
+        "30 ditë %": st.column_config.NumberColumn(format="%+.1f", help="Si po sillet në ditët më të fundit"),
         "Turne live %": st.column_config.NumberColumn(format="%+.2f", help="Prova në kohë reale me para demo që nga nisja e turneut")})
+    st.caption(f"✅ e miratuar: fitoi në periudhën e vjetër dhe në {rec.get('test_days', cfg.test_days)} ditët e fundit · "
+               f"🟡 provizore: fitoi në ditët e fundit dhe nuk po humbet në 30 ditët e fundit, por periudha e vjetër "
+               f"doli negative, ndaj tregton me {cfg.provisional_risk * 100:.0f}% të rrezikut.")
+    _lessons(cfg)
     st.caption("“Turne live” mbushet kur roboti punon si ekip: çdo strategji provohet pa ndalur me 1000 USDT demo. "
                "Një strategji që humbet qartë në turne (nën −5% pas 15 tregtive) nuk miratohet më.")
     with st.expander("Pse miraton disa strategji dhe nuk zgjedh vetëm “më të mirën”?"):

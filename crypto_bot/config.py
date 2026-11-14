@@ -57,6 +57,9 @@ class Config:
     max_total_risk_pct: float = 100.0  # rreziku i përbashkët i pozicioneve të hapura, % e kapitalit (Fokus: 2)
     take_profit_r: float = 0.0         # objektivi si shumëfish i rrezikut (2 = 2× largësia e stop-it); 0 = i fikur
     test_days: int = 120               # sa ditët e fundit përdor analisti si periudhë kontrolli
+    recent_days: int = 30              # periudha e shkurtër: si po sillet strategjia në ditët më të fundit
+    max_active: int = 4                # sa strategji luan ekipi njëkohësisht (të miratuara + provizore)
+    provisional_risk: float = 0.5      # strategjitë provizore tregtojnë me këtë pjesë të rrezikut (0.5 = gjysma)
     risk_per_trade_pct: float = 0.5    # humbja maksimale për tregti si % e kapitalit (0 = përdor vetëm position_size_pct)
     position_size_pct: float = 12.5    # % maksimale e kapitalit për një blerje
     max_open_positions: int = 8

@@ -171,6 +171,20 @@ emrat kthehen vetë në XAUUSD, BTCUSD, EURUSD, GBPUSD.
   (`test_days`). Ari ka histori vetëm nga maji 2026 (kontrata e MEXC është e re).
 - **Telegram:** çdo hyrje e robotit dhe çdo sinjal vjen me një grafik me hyrjen, stop-loss dhe objektivin.
 
+**Roboti është gjithmonë aktiv kur diçka fiton.** Analisti provon strategjitë në katër intervale (15m, 1h, 4h,
+1d) dhe në tre periudha: e vjetër, 90 ditët e fundit dhe 30 ditët e fundit. Statusi:
+
+- ✅ **e miratuar** – fitoi në periudhën e vjetër dhe në 90 ditët e fundit: rrezik i plotë (0.5% për tregti);
+- 🟡 **provizore** – fitoi në 90 ditët e fundit dhe nuk po humbet në 30 ditët e fundit, por periudha e vjetër
+  doli negative (tregu ka ndryshuar): tregton me gjysmën e rrezikut (`provisional_risk`). Strategjitë e reja
+  të laboratorit janë të paktën provizore derisa të kalojnë turneun.
+
+Ekipi luan deri në `max_active` (4) strategji; kapitali i atyre që dalin kthehet te rezerva dhe i jepet të rejave.
+Analisti dërgon në Telegram çdo **sinjal të ri** të strategjive aktive me grafik (hyrja, stop-loss, objektivi),
+rrezikun dhe arsyen; kur disa strategji japin të njëjtin sinjal, vjen një mesazh i vetëm.
+Laboratori **mëson** nga provat: zgjedh më shpesh vlerat e parametrave që kanë dalë mirë (te "Analisti" →
+"Çfarë ka mësuar roboti"), pa i hequr krejt të tjerat.
+
 Rezultati i parë (nëntor 2026): asnjë nga 5 strategjitë bazë nuk fitoi në të dyja periudhat (të gjitha humbën
 në periudhën e mësimit, disa fituan në 90 ditët e fundit), ndaj analisti rekomandoi pushim. Laboratori provoi
 120 strategji të reja; 25 fituan në të dyja periudhat dhe më të mirat hynë në turne.

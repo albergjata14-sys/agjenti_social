@@ -10,6 +10,7 @@ Rruga e një strategjie të re:
 """
 import hashlib
 import json
+import math
 import random
 import time
 
@@ -30,12 +31,13 @@ SPACE = {
 # Hapësira për mënyrën Fokus (ari, BTC, EURUSD, GBPUSD): stop dhe objektiv sipas luhatshmërisë (ATR dhe R),
 # pragje lëvizjeje më të vogla për forex-in, qirinj 1h dhe 4h, lart dhe poshtë.
 FOCUS_SPACE = {
-    "momentum": {"timeframe": ["1h", "4h"], "momentum_days": [3.0, 5.0, 7.0, 10.0, 14.0, 21.0],
+    "momentum": {"timeframe": ["15m", "1h", "4h", "1d"], "momentum_days": [1.0, 2.0, 3.0, 5.0, 7.0, 10.0, 14.0, 21.0, 30.0],
                  "momentum_min_pct": [0.0, 0.5, 1.0, 2.0, 5.0], "momentum_ema": [50, 100, 200],
                  "stop_loss_atr": [1.0, 1.5, 2.0, 3.0], "take_profit_r": [0.0, 1.5, 2.0, 3.0],
                  "allow_short": [True, False], "momentum_daily_filter": [False, True], "daily_trend_ema": [20, 50]},
-    "breakout": {"timeframe": ["1h", "4h"], "breakout_entry": [20, 30, 55, 100], "breakout_exit": [10, 20, 40],
-                 "trend_ema": [100, 200], "daily_trend_ema": [0, 20, 50], "stop_loss_atr": [1.0, 1.5, 2.0, 3.0],
+    "breakout": {"timeframe": ["15m", "1h", "4h", "1d"], "breakout_entry": [20, 30, 55, 100],
+                 "breakout_exit": [10, 20, 40], "trend_ema": [100, 200], "daily_trend_ema": [0, 20, 50],
+                 "stop_loss_atr": [1.0, 1.5, 2.0, 3.0],
                  "take_profit_r": [0.0, 1.5, 2.0, 3.0], "allow_short": [True, False]},
 }
 FIELDS = {k for sp in (SPACE, FOCUS_SPACE) for space in sp.values() for k in space} | {"strategy"}
@@ -73,10 +75,53 @@ def describe(o: dict) -> str:
     return f"Evo: {core}, {stop}{tp}, {o['timeframe']}, {side}"
 
 
-def random_overrides(rng: random.Random, cfg=None) -> dict:
+def learned(cfg) -> dict:
+    """Çfarë ka mësuar laboratori nga të gjitha provat: rezultati mesatar në kontroll për çdo vlerë parametri.
+
+    {(familja, parametri, vlera): (mesatarja %, sa prova)}. Përdoret që provat e reja të zgjedhin më shpesh
+    vlerat që kanë dalë mirë, pa i hequr krejt të tjerat (tregu ndryshon)."""
+    stats = {}
+    for s in memory.strategies(cfg):
+        if s["test"] is None:
+            continue
+        o = s["overrides"]
+        for k, v in o.items():
+            if k != "strategy":
+                stats.setdefault((o.get("strategy"), k, json.dumps(v)), []).append(float(s["test"]))
+    return {key: (sum(v) / len(v), len(v)) for key, v in stats.items()}
+
+
+def _pick(rng, family, key, values, stats):
+    """Zgjedh një vlerë, me peshë më të madhe për ato që kanë dalë mirë (të paktën 4 prova)."""
+    if not stats:
+        return rng.choice(values)
+    weights = []
+    for v in values:
+        mean, n = stats.get((family, key, json.dumps(v)), (0.0, 0))
+        weights.append(math.exp(max(-3.0, min(3.0, mean / 10))) if n >= 4 else 1.0)
+    return rng.choices(values, weights=weights)[0]
+
+
+def random_overrides(rng: random.Random, cfg=None, stats=None) -> dict:
     sp = space(cfg)
     family = rng.choice(list(sp))
-    return {"strategy": family, **{k: rng.choice(v) for k, v in sp[family].items()}}
+    return {"strategy": family, **{k: _pick(rng, family, k, v, stats) for k, v in sp[family].items()}}
+
+
+def lessons(cfg, min_tests: int = 4) -> list:
+    """Përmbledhja për panelin: për çdo parametër, vlera më e mirë dhe më e dobët sipas provave."""
+    by = {}
+    for (fam, key, val), (mean, n) in learned(cfg).items():
+        if n >= min_tests:
+            by.setdefault((fam, key), []).append((mean, json.loads(val), n))
+    out = []
+    for (fam, key), vals in sorted(by.items()):
+        if len(vals) < 2:
+            continue
+        vals.sort(key=lambda x: -x[0])
+        out.append({"family": fam, "param": key, "best": vals[0][1], "best_mean": vals[0][0], "best_n": vals[0][2],
+                    "worst": vals[-1][1], "worst_mean": vals[-1][0], "worst_n": vals[-1][2]})
+    return out
 
 
 def complete(o: dict, rng: random.Random, cfg=None) -> dict:
@@ -91,17 +136,18 @@ def complete(o: dict, rng: random.Random, cfg=None) -> dict:
     return full
 
 
-def mutate(parent: dict, rng: random.Random, cfg=None) -> dict:
+def mutate(parent: dict, rng: random.Random, cfg=None, stats=None) -> dict:
     sp = space(cfg)
     child = complete(parent, rng, cfg)
     for k in rng.sample(list(sp[child["strategy"]]), rng.choice([1, 2])):
-        child[k] = rng.choice(sp[child["strategy"]][k])
+        child[k] = _pick(rng, child["strategy"], k, sp[child["strategy"]][k], stats)
     return child
 
 
 def run_lab(frames_by_tf: dict, base_cfg, n: int = 24, seed=None, test_days: int = 120, log=print) -> list:
     """Krijon dhe provon `n` strategji të reja; ruan rezultatet në kujtesë. Kthen rezultatet e provës."""
     rng = random.Random(seed if seed is not None else time.time())
+    stats = learned(base_cfg)          # çfarë kanë treguar provat e mëparshme
     known = {s["id"] for s in memory.strategies(base_cfg)}
     parents = [c["overrides"] for c in base_candidates(base_cfg) if c["overrides"].get("strategy") in space(base_cfg)]
     parents += [s["overrides"] for s in memory.strategies(base_cfg, ["turne", "ekip"])]
@@ -111,7 +157,8 @@ def run_lab(frames_by_tf: dict, base_cfg, n: int = 24, seed=None, test_days: int
     children, tries = {}, 0
     while len(children) < n and tries < n * 20:
         tries += 1
-        o = mutate(rng.choice(parents), rng, base_cfg) if parents and rng.random() < 0.7 else random_overrides(rng, base_cfg)
+        o = (mutate(rng.choice(parents), rng, base_cfg, stats) if parents and rng.random() < 0.7
+             else random_overrides(rng, base_cfg, stats))
         sid = strategy_id(o)
         if sid not in known and sid not in children:
             children[sid] = o

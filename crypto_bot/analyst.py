@@ -56,7 +56,15 @@ FOCUS_CANDIDATES = [
     {"id": "f_momentum3_1h", "name": "Momentum 3 ditë 1h, stop 1.5×ATR, objektiv 2R",
      "overrides": {"strategy": "momentum", "timeframe": "1h", "allow_short": True, "momentum_days": 3.0,
                    "momentum_min_pct": 0.5, "stop_loss_atr": 1.5, "take_profit_r": 2.0}},
+    {"id": "f_momentum2_15m", "name": "Momentum 2 ditë 15m, stop 1.5×ATR, objektiv 2R",
+     "overrides": {"strategy": "momentum", "timeframe": "15m", "allow_short": True, "momentum_days": 2.0,
+                   "momentum_min_pct": 0.5, "stop_loss_atr": 1.5, "take_profit_r": 2.0}},
+    {"id": "f_thyerje_1d", "name": "Thyerje maje ditore, stop 2×ATR",
+     "overrides": {"strategy": "breakout", "timeframe": "1d", "allow_short": True, "stop_loss_atr": 2.0,
+                   "take_profit_r": 0.0}},
 ]
+# Intervalet dhe sasia e qirinjve që studion analisti në Fokus: nga 15 minuta deri në 1 ditë.
+FOCUS_TIMEFRAMES = {"15m": 10000, "1h": 5000, "4h": 5000, "1d": 1000}
 
 
 def base_candidates(cfg) -> list:
@@ -74,7 +82,7 @@ def _evolved(cfg, statuses):
     if not cfg.memory_file:
         return []
     try:
-        return [{"id": s["id"], "name": s["name"], "overrides": s["overrides"], "origin": "laboratori"}
+        return [{"id": s["id"], "name": s["name"], "overrides": s["overrides"], "origin": "laboratori", "status": s["status"]}
                 for s in memory.strategies(cfg, statuses)]
     except Exception:
         return []
@@ -145,6 +153,7 @@ def evaluate(frames_by_tf: dict, base_cfg, candidates=None, test_days: int = Non
             continue
         end = max(df.index[-1] for df, _ in frames.values())
         cut = end - pd.Timedelta(days=test_days)
+        recent_cut = end - pd.Timedelta(days=base_cfg.recent_days)
         pad = warmup(cfg) + 2
         train, test = _slice(frames, None, cut, 0), _slice(frames, cut, None, pad)
         m_train = _slice({"m": market}, None, cut, 0).get("m") if market else None
@@ -152,38 +161,50 @@ def evaluate(frames_by_tf: dict, base_cfg, candidates=None, test_days: int = Non
         try:
             r_tr = portfolio_backtest(train, cfg, m_train)
             r_te = portfolio_backtest(test, cfg, m_test)
+            # Periudha e shkurtër: si po sillet në ditët më të fundit (tregu ndryshon).
+            recent = _slice(frames, recent_cut, None, pad)
+            r_re = portfolio_backtest(recent, cfg, _slice({"m": market}, recent_cut, None, pad).get("m") if market else None)
         except Exception as e:
             rows.append({**cand, "error": str(e)})
             continue
         ok = bool(r_tr["return_pct"] > 0 and r_te["return_pct"] > 0 and r_te["trades"] >= min_trades)
-        rows.append({**cand, "train": _summary(r_tr), "test": _summary(r_te), "eligible": ok,
-                     "train_from": r_tr["from"], "test_from": r_te["from"], "test_to": r_te["to"]})
+        if cand.get("status") == "turne":
+            ok = False      # strategjitë e reja të laboratorit janë të paktën provizore derisa të kalojnë turneun
+        # Provizore: fiton qartë në periudhën e kontrollit dhe nuk po humbet në ditët e fundit, edhe pse
+        # periudha e vjetër doli negative (tregu ka ndryshuar). Tregton me rrezik më të vogël.
+        prov = bool(not ok and r_te["return_pct"] > 0 and r_re["return_pct"] >= 0 and r_te["trades"] >= min_trades)
+        rows.append({**cand, "train": _summary(r_tr), "test": _summary(r_te), "recent": _summary(r_re), "eligible": ok,
+                     "provisional": prov, "train_from": r_tr["from"], "test_from": r_te["from"], "test_to": r_te["to"]})
     return rows
 
 
-def choose(rows: list, forward: dict = None) -> dict:
+def choose(rows: list, forward: dict = None, max_active: int = 4) -> dict:
     """Rekomandimi nga rezultatet: kandidati më i mirë në kontroll, ose pushim kur asnjë nuk kualifikohet.
 
     `forward`: rezultatet e turneut me para demo ({id: {"return_pct", "trades"}}); një kandidat që po humbet
     qartë në kohë reale (nën −5% me të paktën 15 tregti) nuk rekomandohet.
     """
     forward = forward or {}
-    def ok(r):
+    def alive(r):        # jo një strategji që po humbet qartë në turne
         f = forward.get(r["id"])
-        return r.get("eligible") and not (f and f["trades"] >= 15 and f["return_pct"] < -5)
-    good = sorted((r for r in rows if ok(r)), key=lambda r: -r["test"]["return_pct"])
-    if not good:
-        return {"action": "pause", "id": None, "name": "Pushim: asnjë strategji nuk fitoi në të dyja periudhat",
-                "overrides": {}, "approved": [],
-                "reason": "Asnjë strategji nuk doli me fitim si në periudhën e mësimit ashtu edhe në ditët e fundit "
+        return not (f and f["trades"] >= 15 and f["return_pct"] < -5)
+    score = lambda r: -(r["test"]["return_pct"] + r.get("recent", {}).get("return_pct", 0))
+    good = sorted((r for r in rows if r.get("eligible") and alive(r)), key=score)[:max_active]
+    prov = sorted((r for r in rows if r.get("provisional") and alive(r)), key=score)[:max(0, max_active - len(good))]
+    if not good and not prov:
+        return {"action": "pause", "id": None, "name": "Pushim: asnjë strategji nuk fiton tani",
+                "overrides": {}, "approved": [], "provisional": [],
+                "reason": "Asnjë strategji nuk doli me fitim në periudhën e kontrollit pa humbur në ditët e fundit "
                           "(ose bëri shumë pak tregti). Tregtari nuk hap pozicione të reja derisa të ndryshojë kjo."}
-    best = good[0]
+    best = (good or prov)[0]
     t, tr = best["test"], best["train"]
     return {"action": "trade", "id": best["id"], "name": best["name"], "overrides": best["overrides"],
-            "approved": [r["id"] for r in good],
+            "approved": [r["id"] for r in good], "provisional": [r["id"] for r in prov],
             "reason": f"Në ditët e fundit ({best['test_from']} – {best['test_to']}) dha {t['return_pct']:+.1f}% me rënie "
                       f"maksimale {t['drawdown_pct']:.0f}% dhe {t['trades']} tregti; në periudhën e mësimit "
-                      f"{tr['return_pct']:+.1f}%."}
+                      f"{tr['return_pct']:+.1f}%" + (f"; në {best.get('recent_days', 30)} ditët e fundit "
+                                                       f"{best['recent']['return_pct']:+.1f}%" if best.get("recent") else "")
+                      + ("" if good else ". Provizore: periudha e vjetër doli negative, ndaj tregton me rrezik më të vogël.")}
 
 
 def forward_results(base_cfg) -> dict:
@@ -227,9 +248,9 @@ def analyze_market(exchange, base_cfg, n_symbols: int = 20, test_days: int = Non
     symbols = list(base_cfg.symbols) if base_cfg.focus else top_symbols(exchange, base_cfg.quote, n_symbols)
     if base_cfg.market_filter_symbol and base_cfg.market_filter_symbol not in symbols:
         symbols.append(base_cfg.market_filter_symbol)
-    candidates = team_candidates(base_cfg)
+    candidates = tournament_candidates(base_cfg)
     run_lab = lab_due(base_cfg) if run_lab is None else run_lab
-    need = {"4h": 5000, "1h": 4000} if run_lab else {}
+    need = dict(FOCUS_TIMEFRAMES) if base_cfg.focus else ({"4h": 5000, "1h": 4000} if run_lab else {})
     for cand in candidates:
         tf = cand["overrides"].get("timeframe", base_cfg.timeframe)
         need[tf] = 5000 if tf in ("4h", "1d") else 4000
@@ -247,7 +268,7 @@ def analyze_market(exchange, base_cfg, n_symbols: int = 20, test_days: int = Non
         log(f"Laboratori provoi {len(lab_rows)} strategji të reja; {passed} fituan në të dyja periudhat.")
     rows = evaluate(frames_by_tf, base_cfg, candidates, test_days=test_days)
     fwd = forward_results(base_cfg)
-    rec = choose(rows, fwd)
+    rec = choose(rows, fwd, base_cfg.max_active)
     rec.update({"time": datetime.now(timezone.utc).isoformat(timespec="seconds"), "ts": time.time(),
                 "test_days": test_days, "symbols": len(frames_by_tf.get("4h", {})), "results": rows, "forward": fwd,
                 "seconds": round(time.time() - t0), "lab_tested": len(lab_rows),
@@ -256,13 +277,16 @@ def analyze_market(exchange, base_cfg, n_symbols: int = 20, test_days: int = Non
     return rec
 
 
-def team_config(base_cfg, cand, approved, n_members: int = None):
-    """Konfigurimi i një anëtari të ekipit: kapitali i tij, skedari i tij, dhe pa hyrje të reja kur nuk miratohet."""
+def team_config(base_cfg, cand, approved, n_members: int = None, provisional=()):
+    """Konfigurimi i një anëtari të ekipit: kapitali i tij, skedari i tij, dhe pa hyrje të reja kur nuk është aktiv.
+    Strategjitë provizore tregtojnë me `provisional_risk` (p.sh. gjysmën) e rrezikut."""
     n = n_members or len(base_candidates(base_cfg))
+    risk = base_cfg.risk_per_trade_pct * (base_cfg.provisional_risk if cand["id"] in provisional else 1.0)
     # Anëtarët njoftojnë hyrjet dhe daljet e tyre; sinjalet dhe lëvizjet i njofton analisti (radari), jo pesë herë.
     return replace(candidate_config(base_cfg, cand), label=cand["name"], scan_market=not base_cfg.focus,
-                   notify_signals=False, alert_move_pct=0.0,
-                   paper_balance=base_cfg.paper_balance / n, pause_entries=cand["id"] not in approved,
+                   notify_signals=False, alert_move_pct=0.0, risk_per_trade_pct=risk,
+                   paper_balance=base_cfg.paper_balance / n,
+                   pause_entries=cand["id"] not in approved and cand["id"] not in provisional,
                    state_file=base_cfg.state_file.replace(".json", f"_ekip_{cand['id']}.json"))
 
 
