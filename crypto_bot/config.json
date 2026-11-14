@@ -53,6 +53,8 @@
   "take_profit_r": 0.0,
   "test_days": 90,
   "recent_days": 30,
+  "history_years": 3.0,
+  "use_mt5_data": true,
   "max_active": 4,
   "provisional_risk": 0.5,
   "risk_per_trade_pct": 0.5,
