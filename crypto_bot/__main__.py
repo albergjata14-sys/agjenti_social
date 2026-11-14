@@ -97,6 +97,9 @@ def main(argv=None):
         overrides.update({k: v for k, v in ACTIVE.items() if overrides.get(k) is None})
     cfg = load_config(a.config, **overrides)
 
+    if cfg.exchange == "mt5" and cfg.focus:     # emrat e tregjeve në MetaTrader 5 (XAUUSD, BTCUSD, EURUSD, GBPUSD)
+        from .config import MT5_SYMBOLS
+        cfg.symbols = list(dict.fromkeys(MT5_SYMBOLS.get(s, s) for s in cfg.symbols))
     if a.komanda == "nis" and a.ekip:
         if a.live:
             raise ValueError("ekipi punon vetëm në simulim; nise pa --live")

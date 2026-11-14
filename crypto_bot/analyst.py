@@ -38,9 +38,34 @@ CANDIDATES = [
      "overrides": {"strategy": "score", "timeframe": "4h", "allow_short": False, "take_profit_pct": 4.0,
                    "stop_loss_pct": 2.0}},
 ]
+# Strategjitë bazë për mënyrën Fokus: stop sipas luhatshmërisë (ATR), sepse ari, BTC dhe forex-i lëvizin shumë
+# ndryshe; një stop 8% nuk preket kurrë te EURUSD. Objektivi jepet si shumëfish i rrezikut (R).
+FOCUS_CANDIDATES = [
+    {"id": "f_momentum14", "name": "Momentum 14 ditë, stop 2×ATR, lart dhe poshtë",
+     "overrides": {"strategy": "momentum", "timeframe": "4h", "allow_short": True, "momentum_days": 14.0,
+                   "momentum_min_pct": 1.0, "stop_loss_atr": 2.0, "take_profit_r": 0.0}},
+    {"id": "f_momentum7_r3", "name": "Momentum 7 ditë, stop 2×ATR, objektiv 3R",
+     "overrides": {"strategy": "momentum", "timeframe": "4h", "allow_short": True, "momentum_days": 7.0,
+                   "momentum_min_pct": 1.0, "stop_loss_atr": 2.0, "take_profit_r": 3.0}},
+    {"id": "f_thyerje4h_r2", "name": "Thyerje maje 4h, stop 2×ATR, objektiv 2R",
+     "overrides": {"strategy": "breakout", "timeframe": "4h", "allow_short": True, "stop_loss_atr": 2.0,
+                   "take_profit_r": 2.0}},
+    {"id": "f_thyerje1h_r2", "name": "Thyerje maje 1h, stop 1.5×ATR, objektiv 2R",
+     "overrides": {"strategy": "breakout", "timeframe": "1h", "allow_short": True, "stop_loss_atr": 1.5,
+                   "take_profit_r": 2.0}},
+    {"id": "f_momentum3_1h", "name": "Momentum 3 ditë 1h, stop 1.5×ATR, objektiv 2R",
+     "overrides": {"strategy": "momentum", "timeframe": "1h", "allow_short": True, "momentum_days": 3.0,
+                   "momentum_min_pct": 0.5, "stop_loss_atr": 1.5, "take_profit_r": 2.0}},
+]
+
+
+def base_candidates(cfg) -> list:
+    return FOCUS_CANDIDATES if cfg.focus else CANDIDATES
+
+
 STRATEGY_FIELDS = {"strategy", "timeframe", "allow_short", "momentum_days", "take_profit_pct", "stop_loss_pct",
                    "momentum_min_pct", "momentum_ema", "breakout_entry", "breakout_exit", "trend_ema", "daily_trend_ema",
-                   "trailing_stop_pct", "momentum_daily_filter", "scan_top_n"}
+                   "trailing_stop_pct", "momentum_daily_filter", "scan_top_n", "stop_loss_atr", "take_profit_r"}
 
 
 def _evolved(cfg, statuses):
@@ -57,19 +82,19 @@ def _evolved(cfg, statuses):
 
 def team_candidates(cfg) -> list:
     """Strategjitë që analisti vlerëson dhe ekipi mund t'i luajë: bazë + ato të laboratorit të ngritura në ekip."""
-    return CANDIDATES + _evolved(cfg, ["ekip"])
+    return base_candidates(cfg) + _evolved(cfg, ["ekip"])
 
 
 def tournament_candidates(cfg) -> list:
     """Strategjitë që provohen në turne: bazë + ato të laboratorit në turne ose në ekip."""
-    return CANDIDATES + _evolved(cfg, ["turne", "ekip"])
+    return base_candidates(cfg) + _evolved(cfg, ["turne", "ekip"])
 
 
 def candidate_config(base, cand):
     return replace(base, **cand["overrides"]).validate()
 
 
-def load_frames(exchange, cfg, symbols, timeframe: str, candles: int, fetch=None) -> dict:
+def load_frames(exchange, cfg, symbols, timeframe: str, candles: int, fetch=None, min_frac: float = 0.98) -> dict:
     """{simboli: (qirinjtë, ditorët)} vetëm për monedhat me histori të plotë, sipas renditjes së volumit.
 
     `fetch(exchange, simboli, intervali, sasia)`: si merren qirinjtë (parazgjedhur nga platforma; analisti i
@@ -79,7 +104,7 @@ def load_frames(exchange, cfg, symbols, timeframe: str, candles: int, fetch=None
     for sym in symbols:
         try:
             df = fetch(exchange, sym, timeframe, candles)
-            if len(df) >= candles * 0.98:
+            if len(df) >= candles * min_frac:
                 days = (df.index[-1] - df.index[0]).days + 160
                 daily = df if timeframe == "1d" else fetch(exchange, sym, "1d", days)
                 frames[sym] = (df, daily)
@@ -104,8 +129,10 @@ def _summary(r: dict) -> dict:
             "months_up": int(r["months_up"]), "months_down": int(r["months_down"])}
 
 
-def evaluate(frames_by_tf: dict, base_cfg, candidates=CANDIDATES, test_days: int = 120, min_trades: int = 8) -> list:
+def evaluate(frames_by_tf: dict, base_cfg, candidates=None, test_days: int = None, min_trades: int = 8) -> list:
     """Rezultati i çdo kandidati në periudhën e mësimit dhe në atë të kontrollit (ditët e fundit)."""
+    candidates = base_candidates(base_cfg) if candidates is None else candidates
+    test_days = test_days or base_cfg.test_days
     rows = []
     for cand in candidates:
         cfg = candidate_config(base_cfg, cand)
@@ -193,10 +220,11 @@ def lab_due(cfg) -> bool:
     return last is None or pd.isna(last) or time.time() - float(last) > cfg.lab_hours * 3600
 
 
-def analyze_market(exchange, base_cfg, n_symbols: int = 20, test_days: int = 120, log=print, run_lab=None) -> dict:
+def analyze_market(exchange, base_cfg, n_symbols: int = 20, test_days: int = None, log=print, run_lab=None) -> dict:
     """Shkarkon historinë, (kur i vjen radha) nis laboratorin, provon kandidatët dhe ruan rekomandimin."""
     t0 = time.time()
-    symbols = top_symbols(exchange, base_cfg.quote, n_symbols)
+    test_days = test_days or base_cfg.test_days
+    symbols = list(base_cfg.symbols) if base_cfg.focus else top_symbols(exchange, base_cfg.quote, n_symbols)
     if base_cfg.market_filter_symbol and base_cfg.market_filter_symbol not in symbols:
         symbols.append(base_cfg.market_filter_symbol)
     candidates = team_candidates(base_cfg)
@@ -208,7 +236,7 @@ def analyze_market(exchange, base_cfg, n_symbols: int = 20, test_days: int = 120
     frames_by_tf = {}
     for tf, n in need.items():
         log(f"Analisti po shkarkon {n} qirinj {tf} për {len(symbols)} monedha...")
-        frames_by_tf[tf] = load_frames(exchange, base_cfg, symbols, tf, n)
+        frames_by_tf[tf] = load_frames(exchange, base_cfg, symbols, tf, n, min_frac=0.2 if base_cfg.focus else 0.98)
     lab_rows = []
     if run_lab:
         from . import lab, memory
@@ -230,15 +258,18 @@ def analyze_market(exchange, base_cfg, n_symbols: int = 20, test_days: int = 120
 
 def team_config(base_cfg, cand, approved, n_members: int = None):
     """Konfigurimi i një anëtari të ekipit: kapitali i tij, skedari i tij, dhe pa hyrje të reja kur nuk miratohet."""
-    n = n_members or len(CANDIDATES)
-    return replace(candidate_config(base_cfg, cand), label=cand["name"], scan_market=True,
+    n = n_members or len(base_candidates(base_cfg))
+    # Anëtarët njoftojnë hyrjet dhe daljet e tyre; sinjalet dhe lëvizjet i njofton analisti (radari), jo pesë herë.
+    return replace(candidate_config(base_cfg, cand), label=cand["name"], scan_market=not base_cfg.focus,
+                   notify_signals=False, alert_move_pct=0.0,
                    paper_balance=base_cfg.paper_balance / n, pause_entries=cand["id"] not in approved,
                    state_file=base_cfg.state_file.replace(".json", f"_ekip_{cand['id']}.json"))
 
 
 def tournament_config(base_cfg, cand):
     """Prova paralele: çdo strategji me gjithë kapitalin demo, pa njoftime, gjithmonë aktive."""
-    return replace(candidate_config(base_cfg, cand), label=f"Turne · {cand['name']}", scan_market=True, pause_entries=False,
+    return replace(candidate_config(base_cfg, cand), label=f"Turne · {cand['name']}", scan_market=not base_cfg.focus,
+                   pause_entries=False,
                    state_file=shadow_state_file(base_cfg, cand), log_file="", notify_file="", notify_telegram=False,
                    notify_trades=False, notify_signals=False, alert_move_pct=0.0, alerts_file="")
 

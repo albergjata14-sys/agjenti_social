@@ -18,18 +18,19 @@ from .data import top_symbols
 def scan(exchange, cfg, n: int = 50) -> dict:
     tickers = exchange.fetch_tickers()
     rows = []
-    for sym in top_symbols(exchange, cfg.quote, n):
+    for sym in (list(cfg.symbols) if cfg.focus else top_symbols(exchange, cfg.quote, n)):
         try:
             df = cache.candles(exchange, sym, "4h", 300)
         except Exception:
             continue
-        if len(df) < 120:
+        if len(df) < 90:
             continue
         c, v = df["close"], df["volume"]
         price = float(c.iloc[-1])
         ema = float(c.ewm(span=100, adjust=False).mean().iloc[-1])
         m7 = (price / float(c.iloc[-43]) - 1) * 100
         m14 = (price / float(c.iloc[-85]) - 1) * 100
+        # Forex-i dhe ari kanë pushim në fundjavë në disa burime: mjafton të ketë qirinj të mjaftueshëm.
         vol_ratio = float(v.iloc[-6:].sum() / (v.iloc[-48:-6].sum() / 7)) if v.iloc[-48:-6].sum() else np.nan
         t = tickers.get(sym, {})
         rows.append({"symbol": sym, "price": float(t.get("last") or price), "change24": t.get("percentage"),
@@ -38,9 +39,10 @@ def scan(exchange, cfg, n: int = 50) -> dict:
     # Lëvizjet mbi 80% në 14 ditë janë zakonisht monedha që po shemben ose po hiqen nga bursa: mbahen veçmas.
     extreme = [r for r in rows if abs(r["m14"]) > 80]
     normal = [r for r in rows if abs(r["m14"]) <= 80]
-    up = sorted((r for r in normal if r["m14"] > 5 and r["m7"] > 0 and r["above_ema"]), key=lambda r: -r["m14"])
-    down = sorted((r for r in normal if r["m14"] < -5 and r["m7"] < 0 and not r["above_ema"]), key=lambda r: r["m14"])
-    return {"ts": time.time(), "scanned": len(rows), "up": up[:15], "down": down[:15],
+    th = 1.0 if cfg.focus else 5.0            # forex-i lëviz më pak: prag më i ulët në Fokus
+    up = sorted((r for r in normal if r["m14"] > th and r["m7"] > 0 and r["above_ema"]), key=lambda r: -r["m14"])
+    down = sorted((r for r in normal if r["m14"] < -th and r["m7"] < 0 and not r["above_ema"]), key=lambda r: r["m14"])
+    return {"ts": time.time(), "scanned": len(rows), "up": up[:15], "down": down[:15], "all": rows,
             "extreme": [r["symbol"] for r in extreme]}
 
 

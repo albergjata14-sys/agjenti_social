@@ -90,6 +90,25 @@ def telegram_send(text: str, settings=None) -> bool:
     return telegram_check(text, settings)[0]
 
 
+def telegram_photo(png: bytes, caption: str, settings=None) -> bool:
+    """Dërgon një foto (grafikun) me tekstin si përshkrim. Telegram-i lejon deri në 1024 shkronja."""
+    settings = settings or telegram_settings()
+    if not settings or not is_numeric_chat(settings[1]):
+        return False
+    token, chat = settings
+    try:
+        r = requests.post(API.format(token=token, method="sendPhoto"), data={"chat_id": chat, "caption": caption[:1024]},
+                          files={"photo": ("grafiku.png", png, "image/png")}, timeout=20)
+        return bool(r.json().get("ok"))
+    except (requests.RequestException, ValueError):
+        return False
+
+
+def wants_images(cfg) -> bool:
+    """A ia vlen të vizatohet grafiku: vetëm kur njoftimet shkojnë vërtet në Telegram."""
+    return bool(cfg.notify_telegram and telegram_settings())
+
+
 def telegram_find_chat(token: str, username: str = None):
     """chat_id i bisedës me robotin. Me `username` kërkohet pikërisht ajo llogari; përndryshe biseda e fundit.
     Përdoruesi duhet t'i ketë shkruar robotit më parë (Telegram-i i ruan mesazhet rreth 24 orë)."""
@@ -114,11 +133,15 @@ def telegram_save(token: str, chat_id: str):
 
 
 # --- regjistri i njoftimeve ------------------------------------------------------------------------
-def emit(cfg, kind: str, symbol: str, text: str, **extra) -> dict:
-    """Ruan një njoftim te regjistri dhe e dërgon në Telegram (nëse është lidhur)."""
+def emit(cfg, kind: str, symbol: str, text: str, image: bytes = None, **extra) -> dict:
+    """Ruan një njoftim te regjistri dhe e dërgon në Telegram (nëse është lidhur), me grafik kur ka."""
     entry = {"time": datetime.now(timezone.utc).isoformat(timespec="seconds"), "ts": time.time(), "kind": kind,
              "symbol": symbol, "text": text, **extra}
-    entry["telegram"] = telegram_send(text) if cfg.notify_telegram else False
+    sent = False
+    if cfg.notify_telegram:
+        sent = (telegram_photo(image, text) if image else False) or telegram_send(text)
+    entry["telegram"] = sent
+    entry["image"] = bool(image)
     if cfg.notify_file:
         with open(cfg.notify_file, "a", encoding="utf-8") as f:
             f.write(json.dumps(entry, ensure_ascii=False) + "\n")
@@ -161,6 +184,12 @@ def add_alert(cfg, symbol: str, direction: str, price: float) -> dict:
     return alert
 
 
+def _name(sym: str) -> str:
+    from .config import display
+
+    return display(sym)
+
+
 def _fmt(x) -> str:
     return f"{x:,.6g}"
 
@@ -185,14 +214,24 @@ def check_price_alerts(cfg, prices: dict) -> list:
 SIGNAL_TEXT = {"BLI": "🟢 sinjal blerjeje", "SHORT": "🔻 sinjal shitjeje short", "SHIT": "⚪ sinjal daljeje"}
 
 
-def check_market(cfg, state: dict, analyses: list) -> list:
+def check_market(cfg, state: dict, analyses: list, chart=None) -> list:
     """Sinjale të reja dhe lëvizje të mëdha çmimi te monedhat e analizuara. `state` ruhet nga thirrësi."""
     sent, last_sig, base = [], state.setdefault("notify_signal", {}), state.setdefault("notify_base", {})
     for a in analyses:
         sym, sig, price = a["symbol"], a["signal"], a["price"]
         key = f"{sig}|{a['time']}"
         if cfg.notify_signals and sig in SIGNAL_TEXT and last_sig.get(sym, "").split("|")[0] != sig:
-            sent.append(emit(cfg, "sinjal", sym, f"{SIGNAL_TEXT[sig]} te {sym} @ {_fmt(price)}: {a['signal_reason']}"))
+            p = a.get("plan") or {}
+            levels = (f"\nHyrja {_fmt(price)} · Stop-loss {_fmt(p.get('stop_loss'))} · "
+                      f"{'Objektivi ' + _fmt(p['take_profit']) if p.get('take_profit') else 'fitimi i hapur'}") if p else ""
+            image = None
+            if chart and sig in ("BLI", "SHORT") and p:
+                try:
+                    image = chart(a)
+                except Exception:
+                    image = None
+            sent.append(emit(cfg, "sinjal", sym, f"{SIGNAL_TEXT[sig]} te {_name(sym)} @ {_fmt(price)}: "
+                                                 f"{a['signal_reason']}{levels}", image=image))
         last_sig[sym] = key if sig in SIGNAL_TEXT else ""
         if cfg.alert_move_pct:
             ref = base.get(sym)
@@ -209,7 +248,7 @@ def check_market(cfg, state: dict, analyses: list) -> list:
 def trade_message(kind: str, symbol: str, info: dict, quote: str) -> str:
     if kind in ("BLI", "SHORT"):
         what = "🟢 Roboti BLEU" if kind == "BLI" else "🔻 Roboti hapi SHORT"
-        tp = f" | fitimi {_fmt(info['tp'])}" if info.get("tp") else ""
-        return f"{what} {symbol} @ {_fmt(info['entry'])} | stop {_fmt(info['sl'])}{tp}"
-    return (f"{'✅' if info['pnl'] > 0 else '❌'} Roboti mbylli {info.get('side', 'long')} {symbol} @ {_fmt(info['exit'])}: "
+        tp = f" | objektivi (TP) {_fmt(info['tp'])}" if info.get("tp") else " | fitimi i hapur"
+        return f"{what} {_name(symbol)} @ {_fmt(info['entry'])} | stop-loss {_fmt(info['sl'])}{tp}"
+    return (f"{'✅' if info['pnl'] > 0 else '❌'} Roboti mbylli {info.get('side', 'long')} {_name(symbol)} @ {_fmt(info['exit'])}: "
             f"{info['pnl']:+.2f} {quote} ({info['pnl_pct']:+.2f}%), {info['reason']}")

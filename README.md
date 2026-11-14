@@ -155,6 +155,26 @@ ditë), kalimi te strategjia që kishte fituar më shumë së fundmi dha +2.6%; 
 miratuarave njëherësh dha +12.7%; të gjitha pa filtër +6.6%. Strategjitë e mira të mbajtura fikse dhanë
 +13% deri +17%, por kjo dihet vetëm pas faktit. Ekipi punon vetëm në simulim.
 
+### Mënyra Fokus: XAUUSD, BTCUSDT, BTCUSD, EURUSD, GBPUSD (parazgjedhja)
+
+`config.json` e vendos robotin te pesë tregje, me të dhënat e kontratave të MEXC (`exchange: mexc_futures`,
+simbolet `XAU/USDT`, `BTC/USDT`, `BTC/USD`, `EUR/USDT`, `GBP/USDT`). Në MetaTrader 5 (`--exchange mt5`)
+emrat kthehen vetë në XAUUSD, BTCUSD, EURUSD, GBPUSD.
+
+- **Rreziku:** `risk_per_trade_pct` 0.5% për tregti dhe `max_total_risk_pct` **2%** gjithsej: nëse preken
+  njëkohësisht të gjitha stop-et e hapura, humbja është të shumtën 2% e kapitalit. Një pozicion i ri
+  zvogëlohet ose anashkalohet kur nuk ka më vend për rrezik. Simulimi përdor levë 10 (`leverage`), sepse pa levë
+  forex-i me stop 0.3–0.5% nuk arrin dot rrezikun e zgjedhur.
+- **Stop-loss dhe objektivi** vendosen sipas luhatshmërisë: stop `stop_loss_atr` × ATR (parazgjedhur 2) dhe
+  objektiv `take_profit_r` × rreziku (p.sh. 2R). Një stop 8% fikse nuk preket kurrë te EURUSD.
+- **Analisti dhe laboratori** provojnë vetëm këto pesë tregje, me 90 ditët e fundit si kontroll
+  (`test_days`). Ari ka histori vetëm nga maji 2026 (kontrata e MEXC është e re).
+- **Telegram:** çdo hyrje e robotit dhe çdo sinjal vjen me një grafik me hyrjen, stop-loss dhe objektivin.
+
+Rezultati i parë (nëntor 2026): asnjë nga 5 strategjitë bazë nuk fitoi në të dyja periudhat (të gjitha humbën
+në periudhën e mësimit, disa fituan në 90 ditët e fundit), ndaj analisti rekomandoi pushim. Laboratori provoi
+120 strategji të reja; 25 fituan në të dyja periudhat dhe më të mirat hynë në turne.
+
 ### Analisti i vazhdueshëm dhe radari
 
 Kur nis ekipi (`nis --ekip` ose `start_ekipi.bat`), nis vetë në sfond edhe **analisti i vazhdueshëm**

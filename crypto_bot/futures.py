@@ -86,3 +86,76 @@ def all_tickers() -> dict:
         out[sym] = {"last": float(d["lastPrice"]), "funding_pct": float(d["fundingRate"]) * 100,
                     "change_pct": float(d["riseFallRate"]) * 100}
     return out
+
+
+def history(symbol: str, timeframe: str, limit: int) -> pd.DataFrame:
+    """Histori e gjatë: MEXC kthen deri në 2000 qirinj për kërkesë, ndaj faqosim mbrapa në kohë."""
+    if timeframe not in INTERVALS:
+        raise ValueError(f"Intervali '{timeframe}' nuk mbështetet për kontratat")
+    step, end, parts, got = SECONDS[timeframe], int(time.time()), [], 0
+    while got < limit:
+        d = _get(f"kline/{contract(symbol)}", interval=INTERVALS[timeframe], start=end - step * 2000, end=end)
+        if not d["time"]:
+            break
+        df = pd.DataFrame({"time": pd.to_datetime(d["time"], unit="s", utc=True), "open": d["open"], "high": d["high"],
+                           "low": d["low"], "close": d["close"], "volume": d["amount"]}).set_index("time").astype(float)
+        parts.append(df)
+        got += len(df)
+        if len(df) < 1900:          # nuk ka më histori më të vjetër
+            break
+        end = int(df.index[0].timestamp()) - 1
+    if not parts:
+        return pd.DataFrame(columns=["open", "high", "low", "close", "volume"])
+    out = pd.concat(parts).sort_index()
+    return out[~out.index.duplicated(keep="last")].tail(limit)
+
+
+class MexcFuturesExchange:
+    """Kontratat e MEXC me të njëjtën ndërfaqe si platformat e ccxt (vetëm lexim; urdhrat bëhen në simulim
+    ose në MT5). Simbolet shkruhen si "XAU/USDT", "BTC/USD", "EUR/USDT"."""
+
+    id = "mexc_futures"
+
+    def parse_timeframe(self, timeframe: str) -> int:
+        if timeframe not in SECONDS:
+            raise ValueError(f"Intervali '{timeframe}' nuk mbështetet për kontratat")
+        return SECONDS[timeframe]
+
+    def milliseconds(self) -> int:
+        return int(time.time() * 1000)
+
+    def fetch_ohlcv(self, symbol, timeframe, since=None, limit=None):
+        """Si ccxt: me `since` kthen qirinjtë që fillojnë nga ai çast (deri në `limit`, maksimumi 2000)."""
+        if timeframe not in INTERVALS:
+            raise ValueError(f"Intervali '{timeframe}' nuk mbështetet për kontratat")
+        n = min(limit or 500, 2000)
+        if since is None:
+            df = candles(symbol, timeframe, n)
+        else:
+            step = SECONDS[timeframe]
+            start = int(since // 1000)
+            end = min(int(time.time()), start + step * n)
+            d = _get(f"kline/{contract(symbol)}", interval=INTERVALS[timeframe], start=start, end=end)
+            df = pd.DataFrame({"time": pd.to_datetime(d["time"], unit="s", utc=True), "open": d["open"], "high": d["high"],
+                               "low": d["low"], "close": d["close"], "volume": d["amount"]}).set_index("time").astype(float)
+            df = df[df.index >= pd.Timestamp(since, unit="ms", tz="UTC")].head(n)
+        return [[int(t.timestamp() * 1000), *r] for t, r in zip(df.index, df[["open", "high", "low", "close", "volume"]].to_numpy().tolist())]
+
+    def fetch_ticker(self, symbol):
+        t = ticker(symbol)
+        return {"symbol": symbol, "last": t["last"], "bid": None, "ask": None, "high": t["high"], "low": t["low"],
+                "percentage": t["change_pct"], "quoteVolume": t["volume_quote"]}
+
+    def fetch_tickers(self):
+        out = {}
+        for d in _get("ticker"):
+            sym = d["symbol"].replace("_", "/")
+            out[sym] = {"symbol": sym, "last": float(d["lastPrice"]), "percentage": float(d["riseFallRate"]) * 100,
+                        "high": float(d["high24Price"]), "low": float(d["lower24Price"]),
+                        "quoteVolume": float(d.get("amount24") or 0), "bid": float(d.get("bid1") or 0) or None,
+                        "ask": float(d.get("ask1") or 0) or None}
+        return out
+
+    def load_markets(self):
+        return {s: {"spot": True, "active": True, "base": s.split("/")[0], "quote": s.split("/")[1]}
+                for s in self.fetch_tickers()}

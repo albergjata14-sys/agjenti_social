@@ -4,7 +4,7 @@ import os
 import time
 from pathlib import Path
 
-from .strategy import exit_prices, position_cost
+from .strategy import exit_prices, position_cost, position_risk, position_value, size_position
 
 
 class Broker:
@@ -40,8 +40,12 @@ class Broker:
 
     @staticmethod
     def value(pos: dict, price: float) -> float:
-        """Vlera e një pozicioni: long = sasia × çmimi; short = marzhi + fitimi nga rënia e çmimit."""
-        return pos["qty"] * (price if pos.get("side", 1) > 0 else 2 * pos["entry"] - price)
+        """Vlera e një pozicioni: marzhi + fitimi ose humbja (pa levë: long = sasia × çmimi)."""
+        return position_value(pos, price)
+
+    def open_risk(self) -> float:
+        """Sa do të humbiste kapitali nëse preken njëkohësisht të gjitha stop-et e hapura."""
+        return sum(position_risk(p) for p in self.positions.values())
 
     def equity(self, prices: dict) -> float:
         return self.cash() + sum(self.value(p, prices.get(s, p["entry"])) for s, p in self.positions.items())
@@ -60,14 +64,17 @@ class Broker:
         if stop_price:
             levels = (stop_price, take_price)
             stop_pct = abs(price - stop_price) / price * 100
-        cost = min(position_cost(cfg, equity, stop_pct), self.cash())
-        if cost <= 0 or symbol in self.positions:
+        if symbol in self.positions:
             return None
+        sized = size_position(cfg, equity, self.cash(), price, stop_pct, self.open_risk())
+        if not sized:
+            return None
+        cost, qty, margin = sized
         server_stop = getattr(self.exchange, "stop_on_order", False)
         if self.live:
             if side < 0 and not server_stop:
                 raise RuntimeError("Shitja short me urdhra realë punon vetëm në MT5 (tregu spot nuk e lejon)")
-            qty = float(self.exchange.amount_to_precision(symbol, cost * (1 - fee) / price))
+            qty = float(self.exchange.amount_to_precision(symbol, qty))
             limits = self.exchange.market(symbol).get("limits", {})
             if qty <= 0 or cost < (limits.get("cost", {}).get("min") or 0) or qty < (limits.get("amount", {}).get("min") or 0):
                 return None
@@ -77,17 +84,17 @@ class Broker:
             order = self._settled(order, symbol)
             qty = float(order.get("filled") or qty)
             price = float(order.get("average") or price)
-            cost = float(order.get("cost") or qty * price)
+            cost = float(order.get("cost") or qty * price) / cfg.leverage
+            margin = cost
             # Komisioni shpesh mbahet në monedhën e blerë; mos u përpiq të shesësh më shumë se ke.
             fee_info = order.get("fee") or {}
             if fee_info.get("currency") == symbol.split("/")[0]:
                 qty -= float(fee_info.get("cost") or 0)
         else:
-            qty = cost * (1 - fee) / price
             self.state["cash"] -= cost
         sl, tp = levels if stop_price else exit_prices(cfg, price, stop_pct, side)
-        pos = {"side": side, "qty": qty, "entry": price, "cost": cost, "high": price, "opened": time.time(),
-               "sl": sl, "tp": tp}
+        pos = {"side": side, "qty": qty, "entry": price, "cost": cost, "margin": margin, "high": price,
+               "opened": time.time(), "sl": sl, "tp": tp}
         self.positions[symbol] = pos
         self.save()
         return pos

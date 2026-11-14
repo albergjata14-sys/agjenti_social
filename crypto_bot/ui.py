@@ -15,13 +15,15 @@ from . import analyst, futures, journal, memory, notify, radar, research, sentim
 from .backtest import backtest
 from .bot import is_running, stop_file
 from .broker import Broker
-from .config import ACTIVE, load_config
+from .config import ACTIVE, FOCUS_SYMBOLS, display, load_config
 from .data import fetch_candles, fetch_daily, make_exchange, top_symbols
 from .live_chart import chart_payload, live_chart
 from .outlook import _frame_states, overview
 from .strategy import analyze
 
-PLATFORMS = ["mexc", "binance", "bybit", "mt5"]
+PLATFORMS = ["mexc_futures", "mexc", "binance", "bybit", "mt5"]
+PLATFORM_NAMES = {"mexc_futures": "MEXC Futures (5 tregjet)", "mexc": "MEXC Spot", "binance": "Binance", "bybit": "Bybit",
+                  "mt5": "MetaTrader 5"}
 TIMEFRAMES = ["15m", "1h", "4h", "1d"]
 CHART_TIMEFRAMES = ["1m", "5m", "15m", "1h", "4h", "1d"]
 MARKETS = ["Futures", "Spot"]
@@ -177,7 +179,7 @@ def ticker_strip(tickers: dict, symbols: list, selected: str, fg=None):
         t = tickers.get(sym) or {}
         pct = t.get("percentage")
         arrow = "" if pct is None else ("▲ " if pct >= 0 else "▼ ")
-        tiles.append(f'<div class="cb-tile{" sel" if sym == selected else ""}"><div class="n">{sym.split("/")[0]}</div>'
+        tiles.append(f'<div class="cb-tile{" sel" if sym == selected else ""}"><div class="n">{display(sym).split("/")[0]}</div>'
                      f'<div class="p">{_fmt(t.get("last"))}</div>'
                      f'<div class="c">{arrow}{"" if pct is None else f"{pct:+.2f}%"}</div></div>')
     st.markdown(CSS + f'<div class="cb-strip">{"".join(tiles)}</div>', unsafe_allow_html=True)
@@ -191,7 +193,7 @@ def _status(a, cfg, symbol, price, pos, who):
         side = pos.get("side", 1)
         pnl = (price / pos["entry"] - 1) * 100 * side
         text = (f"**{'Ti ke' if who == 'Ti' else who + ' ka'} një pozicion "
-                f"{'blerjeje (long)' if side > 0 else 'shitjeje (short)'} te {symbol}** nga {_fmt(pos['entry'])}. "
+                f"{'blerjeje (long)' if side > 0 else 'shitjeje (short)'} te {display(symbol)}** nga {_fmt(pos['entry'])}. "
                 f"Tani është **{pnl:+.2f}%**. Mbyllet me humbje te {_fmt(pos['sl'])}"
                 + (f" dhe me fitim te {_fmt(pos['tp'])}." if pos["tp"] else "; fitimi lihet i hapur derisa trendi të kthehet."))
         return (st.success if pnl >= 0 else st.warning)(text)
@@ -279,10 +281,14 @@ def _book_bar(buy_pct: float):
 @st.fragment(run_every=REFRESH)
 def tab_chart(cfg, exchange, symbol):
     c = st.columns([1, 2])
-    market = c[0].segmented_control("Tregu", MARKETS, key="chart_market", default="Futures") or "Futures"
+    if cfg.exchange == "mexc_futures":      # mënyra Fokus: gjithmonë kontratat e MEXC
+        market = "Futures"
+        c[0].markdown(f"**{display(symbol)}**  \nKontrata MEXC")
+    else:
+        market = c[0].segmented_control("Tregu", MARKETS, key="chart_market", default="Futures") or "Futures"
     tf = c[1].segmented_control("Intervali", CHART_TIMEFRAMES, key="chart_tf",
                                 default=cfg.timeframe if cfg.timeframe in CHART_TIMEFRAMES else "4h") or cfg.timeframe
-    fut = market == "Futures" and cfg.exchange == "mexc"
+    fut = market == "Futures" and cfg.exchange in ("mexc", "mexc_futures")
     live, tick, stats = None, None, {}
     if fut:
         try:
@@ -337,7 +343,7 @@ def tab_chart(cfg, exchange, symbol):
         near_stop = plan["entry_low"] if plan["side"] > 0 else plan["entry_high"]
         near_take = plan["entry_high"] if plan["side"] > 0 else plan["entry_low"]
         zones = [(f"Stop-loss {_fmt(plan['stop'])}", plan["stop"], near_stop, "stop"),
-                 ("Zona e hyrjes", plan["entry_low"], plan["entry_high"], "entry"),
+                 ("", plan["entry_low"], plan["entry_high"], "entry"),
                  (f"Objektivi {_fmt(plan['take'])}", near_take, plan["take"], "target")]
     elif a["engulf"]:
         e = a["engulf"]
@@ -351,11 +357,12 @@ def tab_chart(cfg, exchange, symbol):
     shift = _shift(cfg)
     marks = _marks(state, symbol, "Roboti", shift) + _marks(mb.state, symbol, "Ti", shift)
     ema_n = cfg.momentum_ema if cfg.strategy == "momentum" else cfg.trend_ema
-    title = f"{symbol.replace('/', '')} {'Perpetual' if fut else 'Spot'}"
+    title = f"{display(symbol).replace('/', '')} {'Perpetual' if fut else 'Spot'}"
     live_chart(chart_payload(live, title, tf, ema_n, levels, marks, change, height=430, zones=zones, stats=stats,
                              live_symbol=futures.contract(symbol) if fut else None), key="live_chart")
-    st.caption(f"Vija vjollcë: mesatarja EMA{ema_n} e strategjisë; butoni MA shfaq MA5/10/30/60. Shigjetat shënojnë "
-               f"hyrjet, rrathët daljet. Sinjalet llogariten mbi qirinjtë e mbyllur Spot ({cfg.timeframe}).")
+    st.caption(f"Vija vjollcë: mesatarja EMA{ema_n}; butoni MA shfaq MA5/10/30/60. ▲ hyrje në blerje, ▼ hyrje në "
+               f"short, ● dalje. Kutitë djathtas: e kuqërremta = deri te stop-loss, blu = deri te objektivi. Sinjalet "
+               f"llogariten mbi qirinjtë e mbyllur {cfg.timeframe}.")
 
     left, right = st.columns([3, 2])
     with left:
@@ -407,7 +414,8 @@ def tab_chart(cfg, exchange, symbol):
     b = st.columns(3)
     for col, label, side in ((b[0], "🟢 Bli", 1), (b[1], "🔻 Shit short", -1)):
         if col.button(label, width="stretch", disabled=symbol in mb.positions, key=f"open{side}"):
-            p = mb.buy(symbol, price, mb.equity({symbol: price}), cfg.stop_loss_pct, side)
+            # Stop-i i provave me dorë është ai i strategjisë (sipas ATR në Fokus), jo një përqindje fikse.
+            p = mb.buy(symbol, price, mb.equity({symbol: price}), a["plan"]["stop_pct"], side)
             if p:
                 notify.emit(cfg, "tregti", symbol, notify.trade_message("BLI" if side > 0 else "SHORT", symbol, p,
                                                                         cfg.quote).replace("Roboti", "Prova jote"))
@@ -418,8 +426,12 @@ def tab_chart(cfg, exchange, symbol):
         st.rerun(scope="fragment")
     done = mb.state["trades"]
     st.caption(f"Para demo të tuat: {mb.cash():,.2f} {cfg.quote} të lira · {len(done)} tregti të mbyllura, gjithsej "
-               f"{sum(t['pnl'] for t in done):+.2f} {cfg.quote}. Stop-loss {cfg.stop_loss_pct:g}% larg"
-               + (f", fitimi {cfg.take_profit_pct:g}% larg." if cfg.take_profit_pct else ", fitimi lihet i hapur."))
+               f"{sum(t['pnl'] for t in done):+.2f} {cfg.quote}. Stop-loss {a['plan']['stop_pct']:.2f}% larg"
+               + (f" ({cfg.stop_loss_atr:g}×ATR)" if cfg.stop_loss_atr else "")
+               + (f", objektivi {cfg.take_profit_r:g}R." if cfg.take_profit_r else
+                  f", fitimi {cfg.take_profit_pct:g}% larg." if cfg.take_profit_pct else ", fitimi lihet i hapur.")
+               + (f" Rreziku për tregti {cfg.risk_per_trade_pct:g}%, gjithsej deri në {cfg.max_total_risk_pct:g}%."
+                  if cfg.max_total_risk_pct < 100 else ""))
 
 
 def tab_market(cfg, exchange):
@@ -428,7 +440,7 @@ def tab_market(cfg, exchange):
     if st.button("Rifresko pamjen e tregut", type="primary") or st.session_state.get("market_n") == n:
         st.session_state["market_n"] = n
         with st.spinner("Duke parë tregun (deri në një minutë herën e parë)..."):
-            symbols = tuple(_top(cfg.exchange, cfg.quote, n)) if cfg.exchange != "mt5" else tuple(cfg.symbols)
+            symbols = tuple(cfg.symbols) if (cfg.focus or cfg.exchange == "mt5") else tuple(_top(cfg.exchange, cfg.quote, n))
             df = _overview(cfg.exchange, _cfg_json(replace(cfg, timeframe="4h") if cfg.timeframe != "4h" else cfg), symbols)
             fund = _fut_all()
             if fund and not df.empty:
@@ -851,8 +863,9 @@ def tab_tests(cfg, exchange, symbol):
 def _settings(tickers):
     """Zgjedhja e monedhës, mënyra dhe “Rregullime”. Kthen (cfg, exchange, simboli) ose None."""
     base = load_config()
-    pick = st.pills("Monedha", FAVORITES + ["Tjetër"], key="coin", default=base.symbols[0] if base.symbols[0] in FAVORITES
-                    else "Tjetër", format_func=lambda s: s.split("/")[0] if "/" in s else s)
+    favorites = list(base.symbols) if base.focus else FAVORITES
+    pick = st.pills("Tregu", favorites + ["Tjetër"], key="coin", default=favorites[0],
+                    format_func=lambda s: display(s) if s in FOCUS_SYMBOLS else (s.split("/")[0] if "/" in s else s))
     symbol = pick or base.symbols[0]
     if pick == "Tjetër":
         symbol = st.text_input("Shkruaj monedhën (p.sh. PEPE/USDT ose XAUUSD në MT5)", "PEPE/USDT").strip().upper()
@@ -868,7 +881,7 @@ def _settings(tickers):
             st.caption("Mënyra aktive tregton shpesh, në të dy drejtimet. Në prova (20 monedha, 26 muaj) dha +72% me "
                        "rënie deri në 30%; fitimi erdhi nga blerjet, ndërsa shitjet short vetë dolën me humbje.")
         r = st.columns(2)
-        name = r[0].selectbox("Platforma", PLATFORMS, key=f"ex_{mode}",
+        name = r[0].selectbox("Platforma", PLATFORMS, key=f"ex_{mode}", format_func=PLATFORM_NAMES.get,
                               index=PLATFORMS.index(base.exchange) if base.exchange in PLATFORMS else 0)
         timeframe = r[1].selectbox("Intervali i strategjisë", TIMEFRAMES, key=f"tf_{mode}",
                                    index=TIMEFRAMES.index(preset.timeframe) if preset.timeframe in TIMEFRAMES else 2)
@@ -898,15 +911,18 @@ def _settings(tickers):
 
 
 @st.fragment(run_every=15)
-def _strip(name, selected):
-    ticker_strip(_tickers(name), FAVORITES, selected, _fear_greed())
+def _strip(name, selected, symbols):
+    ticker_strip(_tickers(name), symbols, selected, _fear_greed())
 
 
 def render():
-    st.subheader("📈 Roboti i kriptove")
-    st.caption("Çmime reale, para demo. Nuk është këshillë financiare.")
+    st.subheader("📈 Roboti i tregtimit")
+    base_cfg = load_config()
+    st.caption(("Fokus: XAUUSD, BTCUSDT, BTCUSD, EURUSD, GBPUSD · rreziku i hapur gjithsej deri në "
+                f"{base_cfg.max_total_risk_pct:g}% · " if base_cfg.focus else "") + "Çmime reale, para demo. Nuk është këshillë financiare.")
     base = load_config()
-    _strip(base.exchange if base.exchange != "mt5" else "mexc", st.session_state.get("coin") or base.symbols[0])
+    _strip(base.exchange if base.exchange != "mt5" else "mexc", st.session_state.get("coin") or base.symbols[0],
+           list(base.symbols) if base.focus else FAVORITES)
     got = _settings(_tickers(base.exchange))
     if got is None:
         return

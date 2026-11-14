@@ -9,6 +9,10 @@ LEVERAGED = ("UP", "DOWN", "BULL", "BEAR", "3L", "3S")
 
 def make_exchange(cfg, with_keys: bool = False):
     """Krijon lidhjen me platformën. Çelësat lexohen vetëm nga variablat e mjedisit."""
+    if cfg.exchange == "mexc_futures":
+        from .futures import MexcFuturesExchange
+
+        return MexcFuturesExchange()      # kontratat e MEXC: ari, BTC, EURUSD, GBPUSD (vetëm lexim)
     if cfg.exchange.lower() in ("mt5", "metatrader5", "metatrader"):
         from .mt5 import MT5Exchange
 
@@ -69,7 +73,10 @@ def fetch_candles(exchange, symbol: str, timeframe: str, limit: int, closed_only
     while since < now:  # faqo përpara në kohë; platformat kufizojnë qirinjtë për kërkesë
         batch = exchange.fetch_ohlcv(symbol, timeframe, since=since, limit=1000)
         if not batch:
-            break
+            if rows:
+                break
+            since += step * 1000        # periudhë pa të dhëna (para se tregu të ekzistonte): kalo më tej
+            continue
         rows.update((r[0], r) for r in batch)
         nxt = batch[-1][0] + step
         if nxt <= since:

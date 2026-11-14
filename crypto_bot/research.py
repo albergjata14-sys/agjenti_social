@@ -39,8 +39,10 @@ def _save(cfg, st):
 def _frames(exchange, cfg, symbols):
     from .analyst import load_frames
 
-    return {"4h": load_frames(exchange, cfg, symbols, "4h", 5000, fetch=cache.candles),
-            "1h": load_frames(exchange, cfg, symbols, "1h", 4000, fetch=cache.candles)}
+    frac = 0.2 if cfg.focus else 0.98       # në Fokus ari ka më pak histori (kontrata e re), por mbahet
+    return {"4h": load_frames(exchange, cfg, symbols, "4h", 5000, fetch=cache.candles, min_frac=frac),
+            "1h": load_frames(exchange, cfg, symbols, "1h", 5000 if cfg.focus else 4000, fetch=cache.candles,
+                              min_frac=frac)}
 
 
 def research_once(exchange, cfg, st: dict, log=print, now=None) -> dict:
@@ -61,7 +63,7 @@ def research_once(exchange, cfg, st: dict, log=print, now=None) -> dict:
     lab_due = now - st.get("last_lab", 0) >= cfg.research_minutes * 60
     if not (rec_due or lab_due):
         return st
-    symbols = top_symbols(exchange, cfg.quote, cfg.research_symbols)
+    symbols = list(cfg.symbols) if cfg.focus else top_symbols(exchange, cfg.quote, cfg.research_symbols)
     if cfg.market_filter_symbol and cfg.market_filter_symbol not in symbols:
         symbols.append(cfg.market_filter_symbol)
     st["status"] = "duke marrë qirinjtë e rinj"
@@ -87,7 +89,7 @@ def research_once(exchange, cfg, st: dict, log=print, now=None) -> dict:
         old = load_recommendation(cfg) or {}
         rows = evaluate(frames, cfg, team_candidates(cfg))
         rec = choose(rows, forward_results(cfg))
-        rec.update({"time": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now)), "ts": now, "test_days": 120,
+        rec.update({"time": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now)), "ts": now, "test_days": cfg.test_days,
                     "symbols": len(frames["4h"]), "results": rows, "forward": forward_results(cfg),
                     "lab_tested": st.get("tested_total", 0), "lab_passed": st.get("passed_total", 0)})
         Path(cfg.recommendation_file).write_text(json.dumps(rec, indent=2, ensure_ascii=False))

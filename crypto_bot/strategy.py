@@ -61,11 +61,40 @@ def stop_distance_pct(cfg, price: float, atr: float) -> float:
 
 
 def position_cost(cfg, equity: float, stop_pct: float) -> float:
-    """Sa para vihen në një blerje: rrezik fiks i kapitalit, i kufizuar nga position_size_pct."""
-    cap = equity * cfg.position_size_pct / 100
+    """Vlera e pozicionit (sasia × çmimi): rrezik fiks i kapitalit, i kufizuar nga position_size_pct × leva."""
+    cap = equity * cfg.position_size_pct / 100 * cfg.leverage
     if cfg.risk_per_trade_pct and stop_pct > 0:
         return min(equity * cfg.risk_per_trade_pct / stop_pct, cap)
     return cap
+
+
+def size_position(cfg, equity: float, cash: float, price: float, stop_pct: float, open_risk: float = 0.0):
+    """Madhësia e një pozicioni të ri, duke respektuar rrezikun për tregti, rrezikun e përbashkët dhe paratë.
+
+    Kthen (marzhi që paguhet, sasia, marzhi neto pas komisionit) ose None kur nuk lejohet asnjë sasi.
+    Pa levë (leverage = 1) marzhi është e gjithë vlera e pozicionit, si më parë.
+    """
+    fee = cfg.fee_pct / 100
+    notional = position_cost(cfg, equity, stop_pct)
+    room = equity * cfg.max_total_risk_pct / 100 - open_risk
+    if stop_pct > 0:
+        notional = min(notional, max(room, 0) / (stop_pct / 100))
+    cost = min(notional / cfg.leverage, cash)
+    if cost <= 0 or price <= 0:
+        return None
+    notional = cost * cfg.leverage
+    return cost, notional * (1 - fee) / price, cost - notional * fee
+
+
+def position_value(p: dict, price: float) -> float:
+    """Vlera e një pozicioni: marzhi + fitimi ose humbja (pa levë: long = sasia × çmimi)."""
+    margin = p.get("margin", p["qty"] * p["entry"])
+    return max(margin + p.get("side", 1) * p["qty"] * (price - p["entry"]), 0.0)
+
+
+def position_risk(p: dict) -> float:
+    """Sa humbet pozicioni nëse preket stop-i tani (0 kur stop-i ndjekës ka kaluar hyrjen)."""
+    return max(0.0, (p["entry"] - p["sl"]) * p.get("side", 1)) * p["qty"]
 
 
 def signal_frame(df: pd.DataFrame, cfg, daily=None) -> pd.DataFrame:
@@ -127,6 +156,8 @@ def exit_prices(cfg, price: float, stop_pct: float, side: int = 1):
     """(stop-loss, take-profit) për një hyrje në `price`. side: 1 = blerje (long), −1 = shitje short."""
     stop = price * (1 - side * stop_pct / 100)
     take = price * (1 + side * cfg.take_profit_pct / 100) if cfg.take_profit_pct else None
+    if cfg.take_profit_r:               # objektivi sipas rrezikut: R herë largësia e stop-it
+        take = price * (1 + side * cfg.take_profit_r * stop_pct / 100)
     return stop, take
 
 

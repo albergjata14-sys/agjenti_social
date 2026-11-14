@@ -33,11 +33,12 @@ def chart_payload(df: pd.DataFrame, symbol: str, timeframe: str, ema_span: int =
         payload["ema"] = [[int(a), float(b)] for a, b in zip(t, e.to_numpy()) if not np.isnan(b)]
     payload["levels"] = [{"name": n, "price": float(p), "kind": k} for n, p, k in levels if p is not None and np.isfinite(p)]
     # Çdo shenjë vendoset te qiriri ku ndodhi veprimi (grafiku i njeh vetëm kohët e qirinjve).
-    out = []
+    out, seen = [], set()
     for when, kind, text in marks:
         sec = int(pd.Timestamp(when).timestamp())
         i = np.searchsorted(t, sec, side="right") - 1
-        if 0 <= i < len(t):
+        if 0 <= i < len(t) and (int(t[i]), kind) not in seen:   # një shenjë për qiri dhe lloj, jo dhjetë njëra mbi tjetrën
+            seen.add((int(t[i]), kind))
             out.append({"time": int(t[i]), "kind": kind, "text": text})
     payload["marks"] = out
     return payload

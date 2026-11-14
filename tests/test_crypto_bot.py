@@ -83,8 +83,14 @@ def test_config_validation(tmp_path):
         load_config(p)
     p.write_text('{"take_profit_pct": 7}')
     assert load_config(p, stop_loss_pct=3).take_profit_pct == 7
-    assert load_config().symbols == ["BTC/USDT"]
-    assert load_config() == Config()  # config.json dhe parazgjedhjet në kod përputhen
+    from dataclasses import replace
+
+    from crypto_bot.config import FOCUS
+    # config.json = parazgjedhjet në kod + mënyra Fokus (pesë tregjet).
+    assert load_config() == replace(Config(), **FOCUS)
+    assert load_config().symbols == ["XAU/USDT", "BTC/USDT", "BTC/USD", "EUR/USDT", "GBP/USDT"]
+    with pytest.raises(ValueError):
+        Config(risk_per_trade_pct=3, max_total_risk_pct=2).validate()
     with pytest.raises(ValueError):
         Config(strategy="x").validate()
 
@@ -870,7 +876,7 @@ def test_bot_sends_trade_notifications(tmp_path):
     ex = make_fake({"BTC/USDT": trend(400, 100, 0.002)})
     run_cycle(ex, Broker(cfg), cfg)
     texts = [e["text"] for e in notify.recent(cfg)]
-    assert any("Roboti BLEU BTC/USDT" in t for t in texts) and any("sinjal blerjeje" in t for t in texts)
+    assert any("Roboti BLEU BTCUSDT" in t for t in texts) and any("sinjal blerjeje" in t for t in texts)
 
 
 def test_market_overview():
@@ -1209,3 +1215,55 @@ def test_telegram_username_and_errors(monkeypatch):
     monkeypatch.setenv("TELEGRAM_CHAT_ID", "403")
     ok, why = notify.telegram_check()
     assert not ok and "Start" in why and "blocked" in why
+
+
+def test_focus_mode_risk_and_targets(tmp_path):
+    from dataclasses import replace
+
+    from crypto_bot import lab
+    from crypto_bot.analyst import FOCUS_CANDIDATES, base_candidates, candidate_config
+    from crypto_bot.config import FOCUS, MT5_SYMBOLS, display
+    from crypto_bot.strategy import exit_prices, size_position
+
+    cfg = replace(Config(), **FOCUS)
+    assert base_candidates(cfg) is FOCUS_CANDIDATES and display("XAU/USDT") == "XAUUSD"
+    assert {MT5_SYMBOLS[s] for s in cfg.symbols} == {"XAUUSD", "BTCUSD", "EURUSD", "GBPUSD"}
+    # Objektivi si shumëfish i rrezikut: stop 0.5%, 2R → objektiv 1%.
+    sl, tp = exit_prices(replace(cfg, take_profit_r=2.0), 100.0, 0.5, side=1)
+    assert sl == pytest.approx(99.5) and tp == pytest.approx(101.0)
+    # Me levë 10: stop 0.4% (si EURUSD) dhe rrezik 0.5% → pozicion 1.25× kapitali, marzh 12.5%.
+    cost, qty, margin = size_position(replace(cfg, fee_pct=0), 1000, 1000, 1.10, 0.4)
+    assert qty * 1.10 == pytest.approx(1250) and cost == pytest.approx(125)
+    # Rreziku i përbashkët: kur pozicionet e hapura rrezikojnë tashmë 1.8%, i riu merr vetëm 0.2%.
+    cost, qty, _ = size_position(replace(cfg, fee_pct=0), 1000, 1000, 1.10, 0.4, open_risk=18)
+    assert qty * 1.10 * 0.004 == pytest.approx(2.0)
+    assert size_position(cfg, 1000, 1000, 1.10, 0.4, open_risk=20) is None
+
+    # Brokeri me levë: fitimi dhe humbja llogariten mbi gjithë pozicionin, kufiri 2% respektohet.
+    b = Broker(replace(cfg, fee_pct=0, state_file=str(tmp_path / "f.json"), risk_per_trade_pct=1.0))
+    p = b.buy("EUR/USDT", 1.10, 1000, stop_pct=0.4)
+    assert p["cost"] == pytest.approx(250) and b.open_risk() == pytest.approx(10)
+    assert b.equity({"EUR/USDT": 1.10 * 1.004}) == pytest.approx(1010)          # +0.4% × 2500 = +10
+    b.buy("GBP/USDT", 1.30, 1000, stop_pct=0.4)
+    assert b.open_risk() == pytest.approx(20)                                   # 2% e kapitalit
+    assert b.buy("XAU/USDT", 3800, 1000, stop_pct=1.0) is None                  # s'ka më vend për rrezik
+    t = b.sell("EUR/USDT", 1.10 * 0.996, "stop-loss")
+    assert t["pnl"] == pytest.approx(-10)                                       # humbja = 1% e kapitalit
+
+    # Laboratori në Fokus: stop me ATR dhe objektiv me R, pa përqindje fikse.
+    import random
+    rng = random.Random(2)
+    for _ in range(20):
+        o = lab.random_overrides(rng, cfg)
+        assert o["stop_loss_atr"] > 0 and "take_profit_r" in o and "stop_loss_pct" not in o
+        candidate_config(cfg, {"overrides": o})
+    a = {"strategy": "momentum", "momentum_daily_filter": False, "daily_trend_ema": 20, "momentum_days": 7.0}
+    assert lab.strategy_id(a) == lab.strategy_id({**a, "daily_trend_ema": 50})
+    assert "2×ATR" in lab.describe(lab.complete({"strategy": "breakout"}, rng, cfg))
+
+
+def test_trade_chart_image():
+    from crypto_bot.snapshot import render
+
+    png = render(candles(trend(120, 100, 0.001)), "EURUSD 1h · BLERJE (long)", 100.0, 99.0, 102.0, 1)
+    assert png[:8] == b"\x89PNG\r\n\x1a\n" and len(png) > 5000

@@ -1,7 +1,8 @@
 """Testimi i strategjisë mbi të dhëna historike me fitim/humbje në përqindje."""
 import numpy as np
 
-from .strategy import exit_prices, position_cost, signal_frame, stop_distance_pct, warmup
+from .strategy import (exit_prices, position_risk, position_value, signal_frame, size_position, stop_distance_pct,
+                       warmup)
 
 
 def backtest(df, cfg, daily=None) -> dict:
@@ -20,8 +21,7 @@ def backtest(df, cfg, daily=None) -> dict:
     entries_today, today = 0, None
 
     def value(price):
-        # Vlera e pozicionit: long = sasia × çmimi; short = marzhi + fitimi nga rënia.
-        return pos["qty"] * (price if pos["side"] > 0 else 2 * pos["entry"] - price)
+        return position_value(pos, price)
 
     def close(i, price, reason):
         nonlocal cash, pos
@@ -51,11 +51,13 @@ def backtest(df, cfg, daily=None) -> dict:
                 ok = (sl < o[i] < tp) if side > 0 else (tp < o[i] < sl)
                 stop_pct = abs(o[i] - sl) / o[i] * 100
             if ok:
-                cost = position_cost(cfg, cash, stop_pct)
-                pos = {"i": i, "side": side, "entry": o[i], "qty": cost * (1 - fee) / o[i], "cost": cost,
-                       "best": o[i], "sl": sl, "tp": tp, "risk": cost * (1 - fee) * stop_pct / 100}
-                cash -= cost
-                entries_today += 1
+                sized = size_position(cfg, cash, cash, o[i], stop_pct)
+                if sized:
+                    cost, qty, margin = sized
+                    pos = {"i": i, "side": side, "entry": o[i], "qty": qty, "cost": cost, "margin": margin,
+                           "best": o[i], "sl": sl, "tp": tp, "risk": qty * o[i] * stop_pct / 100}
+                    cash -= cost
+                    entries_today += 1
         if pos is not None:
             # Nëse i njëjti qiri prek edhe stop-in edhe fitimin, supozohet rasti më i keq (stop).
             long = pos["side"] > 0
@@ -139,7 +141,7 @@ def portfolio_backtest(frames: dict, cfg, market=None) -> dict:
     start = warmup(cfg) + 1
 
     def value(p, price):
-        return p["qty"] * (price if p["side"] > 0 else 2 * p["entry"] - price)
+        return position_value(p, price)
 
     def close(j, i, price, reason):
         nonlocal cash
@@ -175,11 +177,14 @@ def portfolio_backtest(frames: dict, cfg, market=None) -> dict:
                 else:
                     break
             stop_pct = stop_distance_pct(cfg, o[i, j], atr[i - 1, j])
-            cost = min(position_cost(cfg, total, stop_pct), cash)
-            if cost <= 0:
-                break
+            sized = size_position(cfg, total, cash, o[i, j], stop_pct, sum(position_risk(p) for p in pos.values()))
+            if not sized:
+                if cash <= 0:
+                    break
+                continue                 # rreziku i përbashkët është plot; kandidati tjetër s'mund të hyjë as ai
+            cost, qty, margin = sized
             sl, tp = exit_prices(cfg, o[i, j], stop_pct, side)
-            pos[j] = {"i": i, "side": side, "entry": o[i, j], "qty": cost * (1 - fee) / o[i, j], "cost": cost,
+            pos[j] = {"i": i, "side": side, "entry": o[i, j], "qty": qty, "cost": cost, "margin": margin,
                       "sl": sl, "tp": tp, "best": o[i, j]}
             cash -= cost
         for j in list(pos):     # stop-i kontrollohet i pari: rasti më i keq kur preken të dy brenda një qiriri

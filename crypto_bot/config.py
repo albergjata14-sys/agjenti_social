@@ -8,7 +8,8 @@ DEFAULT_PATH = Path(__file__).with_name("config.json")
 
 @dataclass
 class Config:
-    exchange: str = "mexc"             # mexc, binance, bybit (dhe çdo platformë tjetër e ccxt) ose mt5
+    exchange: str = "mexc"             # mexc, mexc_futures, binance, bybit (dhe çdo platformë e ccxt) ose mt5
+    focus: bool = False                # vetëm tregjet e listës `symbols` (ari, BTC, EURUSD, GBPUSD), pa skanim
     testnet: bool = False              # True = rrjeti i testimit i platformës (Binance, Bybit), me para demo
     quote: str = "USDT"                # monedha bazë me të cilën blihet
     symbols: list = field(default_factory=lambda: ["BTC/USDT"])
@@ -52,6 +53,10 @@ class Config:
     stop_loss_pct: float = 8.0         # shit me humbje kur çmimi bie kaq %
     stop_loss_atr: float = 0.0         # nëse > 0: stop = hyrja − kaq × ATR (zëvendëson stop_loss_pct)
     trailing_stop_pct: float = 0.0     # 0 = i fikur; përndryshe stop-i ndjek çmimin më të lartë
+    leverage: float = 1.0              # leva në simulim (marzhi = vlera e pozicionit / leva); 1 = pa levë
+    max_total_risk_pct: float = 100.0  # rreziku i përbashkët i pozicioneve të hapura, % e kapitalit (Fokus: 2)
+    take_profit_r: float = 0.0         # objektivi si shumëfish i rrezikut (2 = 2× largësia e stop-it); 0 = i fikur
+    test_days: int = 120               # sa ditët e fundit përdor analisti si periudhë kontrolli
     risk_per_trade_pct: float = 0.5    # humbja maksimale për tregti si % e kapitalit (0 = përdor vetëm position_size_pct)
     position_size_pct: float = 12.5    # % maksimale e kapitalit për një blerje
     max_open_positions: int = 8
@@ -116,6 +121,10 @@ class Config:
             raise ValueError("stop_loss_atr, daily_trend_ema dhe max_consecutive_losses duhet të jenë >= 0")
         if not 0 <= self.risk_per_trade_pct <= 100 or self.max_spread_pct < 0:
             raise ValueError("risk_per_trade_pct duhet të jetë 0–100 dhe max_spread_pct >= 0")
+        if self.risk_per_trade_pct > self.max_total_risk_pct:
+            raise ValueError("rreziku për tregti nuk mund të jetë më i madh se rreziku i përbashkët max_total_risk_pct")
+        if self.leverage < 1 or self.take_profit_r < 0 or self.test_days < 10:
+            raise ValueError("leverage >= 1, take_profit_r >= 0 dhe test_days >= 10")
         if not 0 <= self.max_daily_loss_pct < 100:
             raise ValueError("max_daily_loss_pct duhet të jetë midis 0 dhe 100")
         if not 0 < self.stop_loss_pct < 100:
@@ -131,7 +140,21 @@ class Config:
 
 # Mënyra aktive: hyn lart kur tregu (BTC) është në ngritje dhe poshtë kur është në rënie, te monedhat me
 # lëvizjen më të fortë, dhe këmben pozicionet e dobëta me monedha më të forta. Short vetëm në simulim ose MT5.
-ACTIVE = {"strategy": "momentum", "allow_short": True, "timeframe": "4h", "scan_market": True}
+ACTIVE = {"strategy": "momentum", "allow_short": True, "timeframe": "4h"}
+
+# Mënyra Fokus: vetëm pesë tregje, me të dhënat e kontratave të MEXC (ari, BTC, EURUSD, GBPUSD).
+FOCUS_SYMBOLS = ["XAU/USDT", "BTC/USDT", "BTC/USD", "EUR/USDT", "GBP/USDT"]
+DISPLAY = {"XAU/USDT": "XAUUSD", "BTC/USDT": "BTCUSDT", "BTC/USD": "BTCUSD", "EUR/USDT": "EURUSD", "GBP/USDT": "GBPUSD"}
+MT5_SYMBOLS = {"XAU/USDT": "XAUUSD", "BTC/USD": "BTCUSD", "BTC/USDT": "BTCUSD", "EUR/USDT": "EURUSD", "GBP/USDT": "GBPUSD"}
+FOCUS = {"focus": True, "exchange": "mexc_futures", "symbols": FOCUS_SYMBOLS, "scan_market": False,
+         "market_filter_symbol": "", "fee_pct": 0.04, "leverage": 10.0, "risk_per_trade_pct": 0.5,
+         "max_total_risk_pct": 2.0, "position_size_pct": 100.0, "max_open_positions": 5, "stop_loss_atr": 2.0,
+         "research_symbols": 5, "strategy": "momentum", "allow_short": True, "timeframe": "4h",
+         "momentum_min_pct": 1.0, "test_days": 90}
+
+
+def display(symbol: str) -> str:
+    return DISPLAY.get(symbol, symbol)
 
 
 def load_config(path=None, **overrides) -> Config:

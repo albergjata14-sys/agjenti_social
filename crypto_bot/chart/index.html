@@ -21,7 +21,7 @@
   #chart { width: 100%; }
   #zones { position: absolute; inset: 0; pointer-events: none; overflow: hidden; z-index: 5; }
   .zone { position: absolute; border-top: 1px solid; border-bottom: 1px solid; box-sizing: border-box; }
-  .zone span { position: absolute; left: 6px; top: 50%; transform: translateY(-50%); font-size: 12px; font-weight: 600;
+  .zone span { position: absolute; right: 6px; top: 50%; transform: translateY(-50%); font-size: 11px; font-weight: 600;
                white-space: nowrap; padding: 0 4px; border-radius: 4px; background: var(--bg); }
   .mas { display: flex; flex-wrap: wrap; gap: 4px 12px; font-size: 12px; padding: 0 2px 4px; font-variant-numeric: tabular-nums; }
   .mas b { font-weight: 600; }
@@ -178,8 +178,9 @@ function render(args, theme) {
              : lv.kind === "level" ? LightweightCharts.LineStyle.Dotted : LightweightCharts.LineStyle.Dashed,
     color: lv.kind === "stop" ? palette.down : lv.kind === "target" ? palette.up : palette.muted,
   }));
+  // Shenjat janë të vogla dhe pa tekst, që të mos mbulojnë qirinjtë; kuptimi shpjegohet poshtë grafikut.
   candles.setMarkers((args.marks || []).map((m) => ({
-    time: m.time + tzOffset, text: m.text,
+    time: m.time + tzOffset, text: "", size: 0.6,
     position: m.kind === "short" ? "aboveBar" : m.kind === "long" ? "belowBar" : "inBar",
     shape: m.kind === "short" ? "arrowDown" : m.kind === "long" ? "arrowUp" : "circle",
     color: m.kind === "exit" ? palette.muted : palette.ink,
@@ -228,7 +229,7 @@ function drawZones() {
     const H = $("chart").clientHeight, visTop = Math.max(top, 0), visBot = Math.min(top + h, H);
     const labelY = visBot > visTop ? (visTop + visBot) / 2 - top : h / 2;
     html += `<div class="zone" style="left:${left}px;width:${Math.max(0, width - left)}px;top:${top}px;height:${h}px;` +
-            `background:${col}22;border-color:${col}"><span style="color:${col};top:${labelY}px">${z.label}</span></div>`;
+            `background:${col}22;border-color:${col}">` + (z.label ? `<span style="color:${col};top:${labelY}px">${z.label}</span>` : "") + "</div>";
   }
   if (box.innerHTML !== html) box.innerHTML = html;
 }

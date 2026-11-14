@@ -111,6 +111,20 @@ def _rotate(broker, cfg, a, by_symbol, prices, actions) -> bool:
     return True
 
 
+def _trade_chart(exchange, cfg, symbol, info, kind):
+    """PNG për njoftimin: qirinjtë e strategjisë me hyrjen, stop-loss dhe objektivin."""
+    from .config import display
+    from .snapshot import render
+
+    try:
+        df = fetch_candles(exchange, symbol, cfg.timeframe, 100)
+        side = "BLERJE (long)" if kind == "BLI" else "SHITJE (short)"
+        return render(df, f"{display(symbol)} {cfg.timeframe} · {side}", info.get("entry"), info.get("sl"), info.get("tp"),
+                      1 if kind == "BLI" else -1)
+    except Exception:
+        return None
+
+
 def _sell(broker, cfg, sym, price, reason, actions, score=None):
     t = broker.sell(sym, price, reason)
     actions.append(("SHIT", sym, t))
@@ -184,6 +198,8 @@ def run_cycle(exchange, broker, cfg) -> list:
             skip = f"numri maksimal i hyrjeve në ditë ({cfg.max_trades_per_day})"
         elif len(broker.positions) >= cfg.max_open_positions and not _rotate(broker, cfg, a, by_symbol, prices, actions):
             skip = f"numri maksimal i pozicioneve ({cfg.max_open_positions})"
+        elif cfg.max_total_risk_pct < 100 and broker.open_risk() >= equity * cfg.max_total_risk_pct / 100 * 0.999:
+            skip = f"rreziku i pozicioneve të hapura ka arritur {cfg.max_total_risk_pct:g}% të kapitalit"
         elif cfg.max_spread_pct and (spread := spread_pct(exchange, sym) or 0) > cfg.max_spread_pct:
             skip = f"diferenca blerje/shitje shumë e madhe ({spread:.2f}% > {cfg.max_spread_pct:g}%)"
         else:
@@ -206,10 +222,18 @@ def run_cycle(exchange, broker, cfg) -> list:
     # 5) Njoftimet: veprimet e robotit, sinjalet e reja, lëvizjet e mëdha dhe alarmet e çmimit.
     try:
         if cfg.notify_trades:
+            images = notify.wants_images(cfg)
             for kind, sym, info in actions:
                 text = notify.trade_message(kind, sym, info, cfg.quote)
-                notify.emit(cfg, "tregti", sym, f"[{cfg.label}] {text}" if cfg.label else text)
-        notify.check_market(cfg, st, results)
+                image = None
+                if images and kind in ("BLI", "SHORT"):
+                    image = _trade_chart(exchange, cfg, sym, info, kind)
+                notify.emit(cfg, "tregti", sym, f"[{cfg.label}] {text}" if cfg.label else text, image=image)
+        chart = None
+        if notify.wants_images(cfg):
+            chart = lambda a: _trade_chart(exchange, cfg, a["symbol"], {"entry": a["price"], "sl": a["plan"]["stop_loss"],
+                                                                         "tp": a["plan"]["take_profit"]}, a["signal"])
+        notify.check_market(cfg, st, results, chart)
         notify.check_price_alerts(cfg, {a["symbol"]: a["price"] for a in results} | prices)
     except Exception as e:
         log(f"Njoftimet dështuan (roboti vazhdon): {e}")

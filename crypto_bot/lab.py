@@ -14,7 +14,7 @@ import random
 import time
 
 from . import memory
-from .analyst import CANDIDATES, evaluate
+from .analyst import base_candidates, evaluate
 
 SPACE = {
     "momentum": {"timeframe": ["1h", "4h"], "momentum_days": [3.0, 5.0, 7.0, 10.0, 14.0, 21.0, 30.0],
@@ -27,16 +27,40 @@ SPACE = {
                  "take_profit_pct": [0.0, 0.0, 10.0, 20.0], "allow_short": [False, True],
                  "trailing_stop_pct": [0.0, 0.0, 5.0, 10.0], "scan_top_n": [10, 20, 30]},
 }
-FIELDS = {k for space in SPACE.values() for k in space} | {"strategy"}
+# Hapësira për mënyrën Fokus (ari, BTC, EURUSD, GBPUSD): stop dhe objektiv sipas luhatshmërisë (ATR dhe R),
+# pragje lëvizjeje më të vogla për forex-in, qirinj 1h dhe 4h, lart dhe poshtë.
+FOCUS_SPACE = {
+    "momentum": {"timeframe": ["1h", "4h"], "momentum_days": [3.0, 5.0, 7.0, 10.0, 14.0, 21.0],
+                 "momentum_min_pct": [0.0, 0.5, 1.0, 2.0, 5.0], "momentum_ema": [50, 100, 200],
+                 "stop_loss_atr": [1.0, 1.5, 2.0, 3.0], "take_profit_r": [0.0, 1.5, 2.0, 3.0],
+                 "allow_short": [True, False], "momentum_daily_filter": [False, True], "daily_trend_ema": [20, 50]},
+    "breakout": {"timeframe": ["1h", "4h"], "breakout_entry": [20, 30, 55, 100], "breakout_exit": [10, 20, 40],
+                 "trend_ema": [100, 200], "daily_trend_ema": [0, 20, 50], "stop_loss_atr": [1.0, 1.5, 2.0, 3.0],
+                 "take_profit_r": [0.0, 1.5, 2.0, 3.0], "allow_short": [True, False]},
+}
+FIELDS = {k for sp in (SPACE, FOCUS_SPACE) for space in sp.values() for k in space} | {"strategy"}
+
+
+def space(cfg=None) -> dict:
+    return FOCUS_SPACE if cfg is not None and cfg.focus else SPACE
+
+
+def canonical(o: dict) -> dict:
+    """Heq parametrat që nuk kanë efekt, që dy strategji që sillen njësoj të kenë të njëjtin identitet."""
+    o = dict(o)
+    if o.get("strategy") == "momentum" and not o.get("momentum_daily_filter"):
+        o.pop("daily_trend_ema", None)       # pa filtrin ditor, mesatarja ditore nuk përdoret
+    return o
 
 
 def strategy_id(overrides: dict) -> str:
-    return "evo_" + hashlib.sha1(json.dumps(overrides, sort_keys=True).encode()).hexdigest()[:8]
+    return "evo_" + hashlib.sha1(json.dumps(canonical(overrides), sort_keys=True).encode()).hexdigest()[:8]
 
 
 def describe(o: dict) -> str:
     side = "lart+poshtë" if o.get("allow_short") else "vetëm blerje"
     tp = f", fitim {o['take_profit_pct']:g}%" if o.get("take_profit_pct") else ""
+    tp += f", objektiv {o['take_profit_r']:g}R" if o.get("take_profit_r") else ""
     tp += f", stop ndjekës {o['trailing_stop_pct']:g}%" if o.get("trailing_stop_pct") else ""
     tp += f", {o['scan_top_n']} monedha" if o.get("scan_top_n", 20) != 20 else ""
     if o["strategy"] == "momentum":
@@ -45,28 +69,33 @@ def describe(o: dict) -> str:
     else:
         core = (f"thyerje {o['breakout_entry']}/{o['breakout_exit']}, EMA{o['trend_ema']}, "
                 f"ditor {'pa' if not o['daily_trend_ema'] else 'EMA' + str(o['daily_trend_ema'])}")
-    return f"Evo: {core}, stop {o['stop_loss_pct']:g}%{tp}, {o['timeframe']}, {side}"
+    stop = f"stop {o['stop_loss_atr']:g}×ATR" if o.get("stop_loss_atr") else f"stop {o['stop_loss_pct']:g}%"
+    return f"Evo: {core}, {stop}{tp}, {o['timeframe']}, {side}"
 
 
-def random_overrides(rng: random.Random) -> dict:
-    family = rng.choice(list(SPACE))
-    return {"strategy": family, **{k: rng.choice(v) for k, v in SPACE[family].items()}}
+def random_overrides(rng: random.Random, cfg=None) -> dict:
+    sp = space(cfg)
+    family = rng.choice(list(sp))
+    return {"strategy": family, **{k: rng.choice(v) for k, v in sp[family].items()}}
 
 
-def complete(o: dict, rng: random.Random) -> dict:
+def complete(o: dict, rng: random.Random, cfg=None) -> dict:
     """Plotëson parametrat që mungojnë (p.sh. kur prindi është një strategji bazë)."""
     defaults = {"timeframe": "4h", "scan_top_n": 20, "trailing_stop_pct": 0.0, "momentum_daily_filter": False,
                 "daily_trend_ema": 50}
+    sp = space(cfg)
+    defaults.update({"stop_loss_atr": 2.0, "take_profit_r": 0.0, "momentum_min_pct": 1.0} if sp is FOCUS_SPACE else {})
     full = {"strategy": o["strategy"]}
-    for k, v in SPACE[o["strategy"]].items():
+    for k, v in sp[o["strategy"]].items():
         full[k] = o.get(k, defaults.get(k, v[0]))
     return full
 
 
-def mutate(parent: dict, rng: random.Random) -> dict:
-    child = complete(parent, rng)
-    for k in rng.sample(list(SPACE[child["strategy"]]), rng.choice([1, 2])):
-        child[k] = rng.choice(SPACE[child["strategy"]][k])
+def mutate(parent: dict, rng: random.Random, cfg=None) -> dict:
+    sp = space(cfg)
+    child = complete(parent, rng, cfg)
+    for k in rng.sample(list(sp[child["strategy"]]), rng.choice([1, 2])):
+        child[k] = rng.choice(sp[child["strategy"]][k])
     return child
 
 
@@ -74,7 +103,7 @@ def run_lab(frames_by_tf: dict, base_cfg, n: int = 24, seed=None, test_days: int
     """Krijon dhe provon `n` strategji të reja; ruan rezultatet në kujtesë. Kthen rezultatet e provës."""
     rng = random.Random(seed if seed is not None else time.time())
     known = {s["id"] for s in memory.strategies(base_cfg)}
-    parents = [c["overrides"] for c in CANDIDATES if c["overrides"].get("strategy") in SPACE]
+    parents = [c["overrides"] for c in base_candidates(base_cfg) if c["overrides"].get("strategy") in space(base_cfg)]
     parents += [s["overrides"] for s in memory.strategies(base_cfg, ["turne", "ekip"])]
     good = sorted((s for s in memory.strategies(base_cfg, ["provuar"]) if (s["test"] or 0) > 0),
                   key=lambda s: -s["test"])[:5]
@@ -82,7 +111,7 @@ def run_lab(frames_by_tf: dict, base_cfg, n: int = 24, seed=None, test_days: int
     children, tries = {}, 0
     while len(children) < n and tries < n * 20:
         tries += 1
-        o = mutate(rng.choice(parents), rng) if parents and rng.random() < 0.7 else random_overrides(rng)
+        o = mutate(rng.choice(parents), rng, base_cfg) if parents and rng.random() < 0.7 else random_overrides(rng, base_cfg)
         sid = strategy_id(o)
         if sid not in known and sid not in children:
             children[sid] = o
