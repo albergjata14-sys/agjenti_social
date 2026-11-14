@@ -88,7 +88,7 @@ def test_config_validation(tmp_path):
     from crypto_bot.config import FOCUS
     # config.json = parazgjedhjet në kod + mënyra Fokus (pesë tregjet).
     assert load_config() == replace(Config(), **FOCUS)
-    assert load_config().symbols == ["XAU/USDT", "BTC/USDT", "BTC/USD", "EUR/USDT", "GBP/USDT"]
+    assert load_config().symbols == ["BTC/USDT"]
     with pytest.raises(ValueError):
         Config(risk_per_trade_pct=3, max_total_risk_pct=2).validate()
     with pytest.raises(ValueError):
@@ -1239,7 +1239,7 @@ def test_focus_mode_risk_and_targets(tmp_path):
 
     cfg = replace(Config(), **FOCUS)
     assert base_candidates(cfg) is FOCUS_CANDIDATES and display("XAU/USDT") == "XAUUSD"
-    assert {MT5_SYMBOLS[s] for s in cfg.symbols} == {"XAUUSD", "BTCUSD", "EURUSD", "GBPUSD"}
+    assert cfg.symbols == ["BTC/USDT"] and MT5_SYMBOLS["BTC/USDT"] == "BTCUSD" and cfg.strategy == "mtf"
     # Objektivi si shumëfish i rrezikut: stop 0.5%, 2R → objektiv 1%.
     sl, tp = exit_prices(replace(cfg, take_profit_r=2.0), 100.0, 0.5, side=1)
     assert sl == pytest.approx(99.5) and tp == pytest.approx(101.0)
@@ -1398,7 +1398,7 @@ def test_focus_bars_and_yearly_returns():
     from crypto_bot.analyst import focus_bars, yearly
 
     bars = focus_bars(Config(history_years=3))
-    assert bars["4h"] == 6570 and bars["1h"] == 26280 and bars["15m"] == 35040 and bars["1d"] >= 1095
+    assert bars["4h"] == 6570 and bars["1h"] == 26280 and bars["15m"] == 105120 and bars["30m"] == 52560 and bars["8h"] == 3285 and bars["1d"] >= 1095
     idx = pd.date_range("2023-01-01", periods=1100, freq="D", tz="UTC")
     eq = pd.Series(np.linspace(1000, 1300, 1100), index=idx)
     eq.iloc[-365:] = np.linspace(1300, 1200, 365)
@@ -1418,3 +1418,63 @@ def test_cache_keeps_sources_apart(tmp_path, monkeypatch):
     cache.candles(ex.mexc, "XAU/USDT", "1h", 60)
     names = sorted(p.name for p in tmp_path.iterdir())
     assert names == ["mexc_futures_XAU_USDT_1h.pkl", "mt5_XAU_USDT_1h.pkl"]
+
+
+def _btc15(n=7000, drift=0.0004, seed=3):
+    rng = np.random.default_rng(seed)
+    close = 60000 * np.exp(np.cumsum(drift + rng.normal(0, 0.002, n)))
+    idx = pd.date_range("2026-01-01", periods=n, freq="15min", tz="UTC")
+    return pd.DataFrame({"open": np.r_[close[0], close[:-1]], "high": close * 1.001, "low": np.r_[close[0], close[:-1]] * 0.999,
+                         "close": close, "volume": 100.0}, index=idx)
+
+
+def test_mtf_trends_follow_the_market_and_never_look_ahead():
+    from crypto_bot.mtf import trends, warmup_bars
+    from crypto_bot.strategy import warmup
+
+    cfg = Config(strategy="mtf", timeframe="15m", allow_short=True, mtf_ema=20, mtf_min_align=4)
+    assert warmup(cfg) == warmup_bars(cfg) == 20 * 96 + 96
+    up = _btc15()
+    t = trends(up, cfg)
+    assert list(t.columns) == ["t_1d", "t_8h", "t_4h", "t_30m"]
+    assert (t.iloc[-1] == 1).all() and (t["t_1d"].iloc[:1900] == 0).all()     # ngritje e qartë; pa histori → 0
+    down = _btc15(drift=-0.0004)
+    assert (trends(down, cfg).iloc[-1] == -1).all()
+    s = signal_frame(up, cfg)
+    assert s["buy"].sum() > 0 and s["short"].sum() == 0 and not s["buy"].iloc[:warmup(cfg) - 96].any()
+    # Sinjalet e së shkuarës nuk ndryshojnë kur vijnë qirinj të rinj (asnjë e dhënë nga e ardhmja).
+    part = signal_frame(up.iloc[:5000], cfg)
+    assert part["buy"].equals(s["buy"].iloc[:5000]) and part["t_4h"].equals(s["t_4h"].iloc[:5000])
+    # Me qirinj 30-minutësh numërohen vetëm intervalet më të mëdha.
+    half = up.resample("30min").agg({"open": "first", "high": "max", "low": "min", "close": "last", "volume": "sum"})
+    assert list(trends(half, replace_cfg(cfg, timeframe="30m")).columns) == ["t_1d", "t_8h", "t_4h"]
+
+
+def replace_cfg(cfg, **kw):
+    from dataclasses import replace
+
+    return replace(cfg, **kw)
+
+
+def test_trend_report_every_15_minutes(tmp_path, monkeypatch):
+    from crypto_bot import cache, research
+    from crypto_bot.config import FOCUS
+
+    cfg = replace_cfg(Config(), **{**FOCUS, "mtf_ema": 20, "candles": 3000, "notify_file": str(tmp_path / "n.jsonl"),
+                                   "notify_telegram": False, "recommendation_file": str(tmp_path / "r.json"),
+                                   "research_file": str(tmp_path / "res.json"), "memory_file": ""})
+    df = _btc15()
+    rep = research.trend_report(df, cfg, "BTC/USDT")
+    assert rep["mtf"] == {"1d": 1, "8h": 1, "4h": 1, "30m": 1} and rep["side"] == 1
+    assert "BTCUSDT" in rep["text"] and "1 ditë ⬆️" in rep["text"] and "Plani long" in rep["text"]
+    assert rep["plan"]["stop"] < rep["price"] < rep["plan"]["target"]
+    monkeypatch.setattr(cache, "candles", lambda ex, sym, tf, n: df)
+    monkeypatch.setattr(research, "send_signals", lambda *a, **k: [])
+    st = {"last_radar": 1e12, "last_rec": 1e12, "last_lab": 1e12}
+    (tmp_path / "r.json").write_text('{"action": "pause"}')
+    now = 1_800_000_000.0
+    st = research.research_once(None, cfg, st, log=lambda *_: None, now=now)
+    st = research.research_once(None, cfg, st, log=lambda *_: None, now=now + 60)       # i njëjti qiri: pa përsëritje
+    lines = (tmp_path / "n.jsonl").read_text().strip().splitlines()
+    assert len(lines) == 1 and json.loads(lines[0])["kind"] == "trend"
+    assert st["trend"]["BTC/USDT"]["side"] == 1

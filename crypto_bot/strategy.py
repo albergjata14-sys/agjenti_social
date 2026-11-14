@@ -118,6 +118,11 @@ def signal_frame(df: pd.DataFrame, cfg, daily=None) -> pd.DataFrame:
         for col in e:
             s[col] = e[col]
         s["sell"] = s["cover"] = False                # dalja bëhet vetëm me stop ose objektiv
+    elif cfg.strategy == "mtf":
+        from .mtf import mtf_signals
+
+        for name, val in mtf_signals(s, cfg).items():
+            s[name] = val
     elif cfg.strategy == "momentum":
         # Lëvizja e `momentum_days` ditëve të fundit, në %. Hyrje në drejtimin e saj kur kalon pragun dhe
         # çmimi është në anën e duhur të mesatares; dalje kur lëvizja kthehet në anën tjetër.
@@ -149,7 +154,17 @@ def signal_frame(df: pd.DataFrame, cfg, daily=None) -> pd.DataFrame:
 
 def warmup(cfg) -> int:
     """Qirinjtë e nevojshëm para sinjalit të parë të besueshëm."""
-    return max(WARMUP, cfg.trend_ema, cfg.breakout_entry + 1, cfg.breakout_exit + 1)
+    base = max(WARMUP, cfg.trend_ema, cfg.breakout_entry + 1, cfg.breakout_exit + 1)
+    if cfg.strategy == "mtf":
+        from .mtf import warmup_bars
+
+        return max(base, warmup_bars(cfg))
+    return base
+
+
+def live_candles(cfg) -> int:
+    """Sa qirinj merren në punën e drejtpërdrejtë: strategjia mtf ka nevojë për histori më të gjatë (EMA ditore)."""
+    return max(cfg.candles, warmup(cfg) + 100) if cfg.strategy == "mtf" else cfg.candles
 
 
 def exit_prices(cfg, price: float, stop_pct: float, side: int = 1):
@@ -179,6 +194,18 @@ def analyze(df: pd.DataFrame, cfg, symbol: str = "", horizon: int = 12, daily=No
                f"lëvizja {days} {momentum:+.1f}% dhe çmimi mbi mesataren" if signal == "BLI" else
                f"lëvizja {days} {momentum:+.1f}% dhe çmimi nën mesataren" if signal == "SHORT" else
                f"lëvizja {days} {momentum:+.1f}%: nën pragun {cfg.momentum_min_pct:g}% ose në anën e gabuar të mesatares")
+    elif cfg.strategy == "mtf":
+        from .mtf import trend_text
+
+        mtf = {k[2:]: int(last[k]) for k in s.columns if k.startswith("t_")}
+        up, down = sum(v > 0 for v in mtf.values()), sum(v < 0 for v in mtf.values())
+        need = min(cfg.mtf_min_align, len(mtf))
+        why = (trend_text(mtf) + ": " + (
+            "të gjitha lart dhe çmimi u rikthye në trend" if signal == "BLI" else
+            "të gjitha poshtë dhe çmimi u rikthye në rënie" if signal == "SHORT" else
+            f"trendi {cfg.mtf_exit} u kthye" if signal == "SHIT" else
+            f"{max(up, down)}/{len(mtf)} në një drejtim (duhen {need}, asnjë kundër)" if max(up, down) < need or min(up, down) else
+            "trendi është gati, pritet konfirmimi i qiririt"))
     elif cfg.strategy == "engulf":
         why = last["engulf_note"] or "pa sinjal"
     elif signal == "SHORT":
@@ -237,6 +264,7 @@ def analyze(df: pd.DataFrame, cfg, symbol: str = "", horizon: int = 12, daily=No
         "daily_up": bool(last["daily_up"]),
         "daily_down": bool(last["daily_down"]),
         "engulf": engulf,
+        "mtf": ({k[2:]: int(last[k]) for k in s.columns if k.startswith("t_")} if cfg.strategy == "mtf" else None),
         "momentum": None if momentum is None or np.isnan(momentum) else momentum,
         # Forca e sinjalit për renditje dhe këmbim: lëvizja në drejtimin e hyrjes, ose pikët e treguesve.
         "strength": (abs(momentum) if momentum is not None and not np.isnan(momentum) else abs(score)),

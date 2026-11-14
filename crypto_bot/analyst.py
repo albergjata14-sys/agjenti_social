@@ -38,43 +38,47 @@ CANDIDATES = [
      "overrides": {"strategy": "score", "timeframe": "4h", "allow_short": False, "take_profit_pct": 4.0,
                    "stop_loss_pct": 2.0}},
 ]
-# Strategjitë bazë për mënyrën Fokus: stop sipas luhatshmërisë (ATR), sepse ari, BTC dhe forex-i lëvizin shumë
-# ndryshe; një stop 8% nuk preket kurrë te EURUSD. Objektivi jepet si shumëfish i rrezikut (R).
+# Strategjitë bazë për mënyrën Fokus (vetëm BTCUSDT). Stop sipas luhatshmërisë (ATR), objektivi si shumëfish i
+# rrezikut (R). Strategjitë `mtf` e matin trendin nga 1 dita te 30 minutat dhe hyjnë në intervalin e vogël.
+def _mtf(tf, ema, align, trigger, exit_tf, atr, r):
+    return {"strategy": "mtf", "timeframe": tf, "allow_short": True, "mtf_ema": ema, "mtf_min_align": align,
+            "mtf_trigger": trigger, "mtf_trigger_ema": 20, "mtf_exit": exit_tf, "stop_loss_atr": atr, "take_profit_r": r}
+
+
 FOCUS_CANDIDATES = [
-    {"id": "f_momentum14", "name": "Momentum 14 ditë, stop 2×ATR, lart dhe poshtë",
+    {"id": "f_mtf15_terheqje", "name": "Shumë-intervale 15m: tërheqje, 4/4 në trend, stop 2.5×ATR",
+     "overrides": _mtf("15m", 50, 4, "pullback", "4h", 2.5, 0.0)},
+    {"id": "f_mtf15_thyerje", "name": "Shumë-intervale 15m: thyerje, 4/4 në trend, stop 2.5×ATR",
+     "overrides": _mtf("15m", 50, 4, "breakout", "4h", 2.5, 0.0)},
+    {"id": "f_mtf15_r3", "name": "Shumë-intervale 15m: tërheqje, 3/4 në trend, objektiv 3R",
+     "overrides": _mtf("15m", 20, 3, "pullback", "4h", 2.5, 3.0)},
+    {"id": "f_mtf30", "name": "Shumë-intervale 30m: tërheqje, stop 2.5×ATR",
+     "overrides": _mtf("30m", 50, 3, "pullback", "4h", 2.5, 0.0)},
+    {"id": "f_mtf1h", "name": "Shumë-intervale 1h: tërheqje, stop 2.5×ATR (provë 3-vjeçare)",
+     "overrides": _mtf("1h", 50, 3, "pullback", "8h", 2.5, 0.0)},
+    {"id": "f_momentum14", "name": "Momentum 14 ditë 4h, stop 2×ATR, lart dhe poshtë",
      "overrides": {"strategy": "momentum", "timeframe": "4h", "allow_short": True, "momentum_days": 14.0,
                    "momentum_min_pct": 1.0, "stop_loss_atr": 2.0, "take_profit_r": 0.0}},
-    {"id": "f_momentum7_r3", "name": "Momentum 7 ditë, stop 2×ATR, objektiv 3R",
-     "overrides": {"strategy": "momentum", "timeframe": "4h", "allow_short": True, "momentum_days": 7.0,
-                   "momentum_min_pct": 1.0, "stop_loss_atr": 2.0, "take_profit_r": 3.0}},
     {"id": "f_thyerje4h_r2", "name": "Thyerje maje 4h, stop 2×ATR, objektiv 2R",
      "overrides": {"strategy": "breakout", "timeframe": "4h", "allow_short": True, "stop_loss_atr": 2.0,
                    "take_profit_r": 2.0}},
-    {"id": "f_thyerje1h_r2", "name": "Thyerje maje 1h, stop 1.5×ATR, objektiv 2R",
-     "overrides": {"strategy": "breakout", "timeframe": "1h", "allow_short": True, "stop_loss_atr": 1.5,
-                   "take_profit_r": 2.0}},
-    {"id": "f_momentum3_1h", "name": "Momentum 3 ditë 1h, stop 1.5×ATR, objektiv 2R",
-     "overrides": {"strategy": "momentum", "timeframe": "1h", "allow_short": True, "momentum_days": 3.0,
-                   "momentum_min_pct": 0.5, "stop_loss_atr": 1.5, "take_profit_r": 2.0}},
-    {"id": "f_momentum2_15m", "name": "Momentum 2 ditë 15m, stop 1.5×ATR, objektiv 2R",
-     "overrides": {"strategy": "momentum", "timeframe": "15m", "allow_short": True, "momentum_days": 2.0,
-                   "momentum_min_pct": 0.5, "stop_loss_atr": 1.5, "take_profit_r": 2.0}},
     {"id": "f_thyerje_1d", "name": "Thyerje maje ditore, stop 2×ATR",
      "overrides": {"strategy": "breakout", "timeframe": "1d", "allow_short": True, "stop_loss_atr": 2.0,
                    "take_profit_r": 0.0}},
 ]
-# Intervalet dhe sasia e qirinjve që studion analisti në Fokus: nga 15 minuta deri në 1 ditë.
-FOCUS_TIMEFRAMES = {"15m": 10000, "1h": 5000, "4h": 5000, "1d": 1000}
+# Intervalet që studion analisti në Fokus: nga 15 minuta deri në 1 ditë.
+FOCUS_TIMEFRAMES = {"15m": 10000, "30m": 8000, "1h": 5000, "4h": 5000, "8h": 2500, "1d": 1000}
 
 
 def focus_bars(cfg) -> dict:
-    """Sa qirinj shkarkohen për çdo interval që provat të mbulojnë `history_years` vite (15 min: deri në 1 vit)."""
+    """Sa qirinj shkarkohen për çdo interval që provat të mbulojnë `history_years` vite. Platforma jep aq sa ka
+    (MEXC: rreth 1 vit në 15 minuta, më shumë në intervalet e mëdha)."""
     years = max(float(getattr(cfg, "history_years", 0) or 0), 0.0)
     if years <= 0:
         return dict(FOCUS_TIMEFRAMES)
     days = 365 * years
-    return {"15m": max(10000, int(min(years, 1.0) * 365 * 96)), "1h": max(5000, int(days * 24)),
-            "4h": max(5000, int(days * 6)), "1d": max(1000, int(days) + 250)}
+    return {"15m": max(10000, int(days * 96)), "30m": max(8000, int(days * 48)), "1h": max(5000, int(days * 24)),
+            "4h": max(5000, int(days * 6)), "8h": max(2500, int(days * 3)), "1d": max(1000, int(days) + 250)}
 
 
 def yearly(eq: pd.Series, years: int = 3) -> list:
@@ -100,7 +104,8 @@ def base_candidates(cfg) -> list:
 
 STRATEGY_FIELDS = {"strategy", "timeframe", "allow_short", "momentum_days", "take_profit_pct", "stop_loss_pct",
                    "momentum_min_pct", "momentum_ema", "breakout_entry", "breakout_exit", "trend_ema", "daily_trend_ema",
-                   "trailing_stop_pct", "momentum_daily_filter", "scan_top_n", "stop_loss_atr", "take_profit_r"}
+                   "trailing_stop_pct", "momentum_daily_filter", "scan_top_n", "stop_loss_atr", "take_profit_r",
+                   "mtf_ema", "mtf_min_align", "mtf_trigger", "mtf_trigger_ema", "mtf_exit"}
 
 
 def _evolved(cfg, statuses):

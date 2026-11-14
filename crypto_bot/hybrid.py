@@ -76,7 +76,7 @@ class HybridExchange:
 
 def with_mt5(mexc, cfg, log=None):
     """MEXC + MT5 kur terminali MT5 është i hapur; përndryshe vetëm MEXC."""
-    if not getattr(cfg, "use_mt5_data", True):
+    if not getattr(cfg, "use_mt5_data", True) or not any(sym in MT5_SOURCE for sym in cfg.symbols):
         return mexc
     try:
         from .mt5 import MT5Exchange

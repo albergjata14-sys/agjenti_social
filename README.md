@@ -155,39 +155,49 @@ ditë), kalimi te strategjia që kishte fituar më shumë së fundmi dha +2.6%; 
 miratuarave njëherësh dha +12.7%; të gjitha pa filtër +6.6%. Strategjitë e mira të mbajtura fikse dhanë
 +13% deri +17%, por kjo dihet vetëm pas faktit. Ekipi punon vetëm në simulim.
 
-### Mënyra Fokus: XAUUSD, BTCUSDT, BTCUSD, EURUSD, GBPUSD (parazgjedhja)
+### Mënyra Fokus: vetëm BTCUSDT (parazgjedhja)
 
-`config.json` e vendos robotin te pesë tregje, me të dhënat e kontratave të MEXC (`exchange: mexc_futures`,
-simbolet `XAU/USDT`, `BTC/USDT`, `BTC/USD`, `EUR/USDT`, `GBP/USDT`). Në MetaTrader 5 (`--exchange mt5`)
-emrat kthehen vetë në XAUUSD, BTCUSD, EURUSD, GBPUSD.
+`config.json` e vendos robotin te **një treg i vetëm: BTCUSDT** (kontrata e MEXC, `exchange: mexc_futures`).
+Analisti, laboratori, turneu dhe tregtari punojnë vetëm me të.
 
-- **Rreziku:** `risk_per_trade_pct` 0.5% për tregti dhe `max_total_risk_pct` **2%** gjithsej: nëse preken
-  njëkohësisht të gjitha stop-et e hapura, humbja është të shumtën 2% e kapitalit. Një pozicion i ri
-  zvogëlohet ose anashkalohet kur nuk ka më vend për rrezik. Simulimi përdor levë 10 (`leverage`), sepse pa levë
-  forex-i me stop 0.3–0.5% nuk arrin dot rrezikun e zgjedhur.
-- **Stop-loss dhe objektivi** vendosen sipas luhatshmërisë: stop `stop_loss_atr` × ATR (parazgjedhur 2) dhe
-  objektiv `take_profit_r` × rreziku (p.sh. 2R). Një stop 8% fikse nuk preket kurrë te EURUSD.
-- **Analisti dhe laboratori** provojnë vetëm këto pesë tregje, me 90 ditët e fundit si kontroll
-  (`test_days`). Ari ka histori vetëm nga maji 2026 (kontrata e MEXC është e re).
-- **Telegram:** çdo hyrje e robotit dhe çdo sinjal vjen me një grafik me hyrjen, stop-loss dhe objektivin.
+**Strategjia shumë-intervalëshe (`mtf`).** Trendi matet nga lart poshtë: **1 ditë → 8 orë → 4 orë → 30 minuta**,
+dhe hyrja ("beteja") bëhet në qirinjtë **15-minutësh**:
 
-**Roboti është gjithmonë aktiv kur diçka fiton.** Analisti provon strategjitë në katër intervale (15m, 1h, 4h,
-1d) dhe në tre periudha: e vjetër, 90 ditët e fundit dhe 30 ditët e fundit. Statusi:
+1. Çdo interval është ⬆️ (çmimi mbi mesataren e tij dhe mesatarja në ngritje), ⬇️ ose ➡️ (i paqartë).
+2. Hyrje vetëm kur `mtf_min_align` intervale (parazgjedhur të 4-ta) janë në një drejtim dhe asnjë kundër.
+3. 15 minutat japin çastin: `pullback` (çmimi kthehet te mesatarja e shpejtë dhe rikthehet në trend) ose
+   `breakout` (thyerje e majës / fundit të 20 qirinjve).
+4. Roboti i llogarit vetë nivelet: **stop-loss** `stop_loss_atr` × ATR (2.5), **objektivi** `take_profit_r` × rreziku
+   (0 = fitimi lihet të vrapojë) dhe dalje kur kthehet trendi i `mtf_exit` (4 orë). Madhësia del nga rreziku:
+   `risk_per_trade_pct` 0.5% për tregti, gjithsej jo më shumë se `max_total_risk_pct` **2%**.
 
-- ✅ **e miratuar** – fitoi në periudhën e vjetër dhe në 90 ditët e fundit: rrezik i plotë (0.5% për tregti);
-- 🟡 **provizore** – fitoi në 90 ditët e fundit dhe nuk po humbet në 30 ditët e fundit, por periudha e vjetër
-  doli negative (tregu ka ndryshuar): tregton me gjysmën e rrezikut (`provisional_risk`). Strategjitë e reja
-  të laboratorit janë të paktën provizore derisa të kalojnë turneun.
+**Raporti i trendit çdo 15 minuta** (`trend_minutes`): pas çdo qiriri të mbyllur vjen në Telegram gjendja e të
+gjitha intervaleve, vendimi (prit / trend gati / sinjal) dhe plani me hyrje, stop dhe objektiv. Sinjalet e
+strategjive aktive kontrollohen në të njëjtin çast dhe vijnë me grafik. Për ta fikur: `"trend_minutes": 0`.
 
-Ekipi luan deri në `max_active` (4) strategji; kapitali i atyre që dalin kthehet te rezerva dhe i jepet të rejave.
-Analisti dërgon në Telegram çdo **sinjal të ri** të strategjive aktive me grafik (hyrja, stop-loss, objektivi),
-rrezikun dhe arsyen; kur disa strategji japin të njëjtin sinjal, vjen një mesazh i vetëm.
-Laboratori **mëson** nga provat: zgjedh më shpesh vlerat e parametrave që kanë dalë mirë (te "Analisti" →
-"Çfarë ka mësuar roboti"), pa i hequr krejt të tjerat.
+**Analisti** provon pa ndalur në 15m, 30m, 1h, 4h, 8h dhe 1 ditë (MEXC jep rreth 1 vit në 15m dhe 3 vjet në
+intervalet e tjera) dhe laboratori kërkon variante të reja, gjysmën e kohës te strategjia shumë-intervalëshe.
+Statusi i çdo strategjie:
 
-Rezultati i parë (nëntor 2026): asnjë nga 5 strategjitë bazë nuk fitoi në të dyja periudhat (të gjitha humbën
-në periudhën e mësimit, disa fituan në 90 ditët e fundit), ndaj analisti rekomandoi pushim. Laboratori provoi
-120 strategji të reja; 25 fituan në të dyja periudhat dhe më të mirat hynë në turne.
+- ✅ **e miratuar** – fitoi në periudhën e vjetër, në 90 ditët e fundit dhe në afat të gjatë: rrezik i plotë;
+- 🟡 **provizore** – fitoi në 90 ditët e fundit dhe nuk po humbet në 30 ditët e fundit: gjysma e rrezikut.
+
+Ekipi luan deri në `max_active` (4) strategji, secila me pjesën e vet të kapitalit.
+
+Rezultati i parë me të dhëna reale (BTCUSDT, nëntor 2026, rrezik 0.5% për tregti, komisione të përfshira):
+
+| Strategjia | Historia | Fitimi | Rënia maks. | Vit për vit |
+|---|---|---|---|---|
+| Shumë-intervale 30m | 3 vjet | +63.7% | 17.4% | +33.4 · −2.7 · +26.1 |
+| Shumë-intervale 1h | 3 vjet | +38.7% | 10.6% | +12.6 · +1.6 · +21.3 |
+| Shumë-intervale 15m (thyerje) | 1 vit | +53.7% | 15.3% | – |
+| Shumë-intervale 15m (tërheqje) | 1 vit | +48.0% | 15.2% | – |
+| Momentum 14 ditë 4h | 3 vjet | +26.3% | 8.0% | +16.7 · +3.4 · +4.7 |
+
+Kujdes: këto strategji fitojnë pak herë dhe shumë (rreth 15–20% e tregtive mbyllen me fitim; humbjet janë të
+vogla dhe të shpeshta), ndaj ka periudha të gjata pa fitim. Variantet 15-minutëshe u zgjodhën pasi u panë
+rezultatet e të njëjtit vit, prandaj janë më pak të besueshme se ato 30m dhe 1h; shumica e varianteve të
+provuara (105 nga 128) humbën. E shkuara nuk e garanton të ardhmen: prandaj turneu me para demo vazhdon.
 
 ### Historia 2–3 vjeçare dhe të dhënat nga MT5
 

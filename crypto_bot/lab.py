@@ -31,11 +31,15 @@ SPACE = {
 # Hapësira për mënyrën Fokus (ari, BTC, EURUSD, GBPUSD): stop dhe objektiv sipas luhatshmërisë (ATR dhe R),
 # pragje lëvizjeje më të vogla për forex-in, qirinj 1h dhe 4h, lart dhe poshtë.
 FOCUS_SPACE = {
-    "momentum": {"timeframe": ["15m", "1h", "4h", "1d"], "momentum_days": [1.0, 2.0, 3.0, 5.0, 7.0, 10.0, 14.0, 21.0, 30.0],
+    # Trendi nga 1 dita te 30 minutat, hyrja në intervalin e vogël (15 minutat peshojnë më shumë në kërkim).
+    "mtf": {"timeframe": ["15m", "15m", "30m", "1h"], "mtf_ema": [10, 20, 30, 50, 80], "mtf_min_align": [2, 3, 4],
+            "mtf_trigger": ["pullback", "breakout"], "mtf_trigger_ema": [10, 20, 40], "mtf_exit": ["30m", "4h", "8h", "1d", ""],
+            "stop_loss_atr": [1.5, 2.0, 2.5, 3.0, 4.0], "take_profit_r": [0.0, 2.0, 3.0, 5.0], "allow_short": [True, False]},
+    "momentum": {"timeframe": ["15m", "30m", "1h", "4h", "8h", "1d"], "momentum_days": [1.0, 2.0, 3.0, 5.0, 7.0, 10.0, 14.0, 21.0, 30.0],
                  "momentum_min_pct": [0.0, 0.5, 1.0, 2.0, 5.0], "momentum_ema": [50, 100, 200],
                  "stop_loss_atr": [1.0, 1.5, 2.0, 3.0], "take_profit_r": [0.0, 1.5, 2.0, 3.0],
                  "allow_short": [True, False], "momentum_daily_filter": [False, True], "daily_trend_ema": [20, 50]},
-    "breakout": {"timeframe": ["15m", "1h", "4h", "1d"], "breakout_entry": [20, 30, 55, 100],
+    "breakout": {"timeframe": ["15m", "30m", "1h", "4h", "8h", "1d"], "breakout_entry": [20, 30, 55, 100],
                  "breakout_exit": [10, 20, 40], "trend_ema": [100, 200], "daily_trend_ema": [0, 20, 50],
                  "stop_loss_atr": [1.0, 1.5, 2.0, 3.0],
                  "take_profit_r": [0.0, 1.5, 2.0, 3.0], "allow_short": [True, False]},
@@ -65,7 +69,11 @@ def describe(o: dict) -> str:
     tp += f", objektiv {o['take_profit_r']:g}R" if o.get("take_profit_r") else ""
     tp += f", stop ndjekës {o['trailing_stop_pct']:g}%" if o.get("trailing_stop_pct") else ""
     tp += f", {o['scan_top_n']} monedha" if o.get("scan_top_n", 20) != 20 else ""
-    if o["strategy"] == "momentum":
+    if o["strategy"] == "mtf":
+        core = (f"shumë-intervale EMA{o['mtf_ema']}, {o['mtf_min_align']} në trend, "
+                f"{'tërheqje' if o['mtf_trigger'] == 'pullback' else 'thyerje'} {o['mtf_trigger_ema']}, "
+                f"dalje {'me trendin ' + o['mtf_exit'] if o.get('mtf_exit') else 'vetëm stop/objektiv'}")
+    elif o["strategy"] == "momentum":
         core = (f"momentum {o['momentum_days']:g}d, prag {o['momentum_min_pct']:g}%, EMA{o['momentum_ema']}"
                 + (f", trend ditor EMA{o['daily_trend_ema']}" if o.get("momentum_daily_filter") else ""))
     else:
@@ -104,7 +112,7 @@ def _pick(rng, family, key, values, stats):
 
 def random_overrides(rng: random.Random, cfg=None, stats=None) -> dict:
     sp = space(cfg)
-    family = rng.choice(list(sp))
+    family = rng.choice(list(sp) + (['mtf'] if 'mtf' in sp else []))    # në Fokus, gjysma e kërkimit te shumë-intervalet
     return {"strategy": family, **{k: _pick(rng, family, k, v, stats) for k, v in sp[family].items()}}
 
 

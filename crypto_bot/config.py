@@ -58,6 +58,11 @@ class Config:
     take_profit_r: float = 0.0         # objektivi si shumëfish i rrezikut (2 = 2× largësia e stop-it); 0 = i fikur
     test_days: int = 120               # sa ditët e fundit përdor analisti si periudhë kontrolli
     recent_days: int = 30              # periudha e shkurtër: si po sillet strategjia në ditët më të fundit
+    mtf_ema: int = 20                  # strategjia mtf: EMA e çdo intervali (1 ditë, 8 orë, 4 orë, 30 min)
+    mtf_min_align: int = 4             # sa intervale duhet të jenë në të njëjtin drejtim (asnjë kundër)
+    mtf_trigger: str = "pullback"      # hyrja në intervalin e vogël: "pullback" (tërheqje) ose "breakout" (thyerje)
+    mtf_trigger_ema: int = 20          # mesatarja e shpejtë / numri i qirinjve të thyerjes
+    mtf_exit: str = "4h"               # dalje kur kthehet trendi i këtij intervali ("" = vetëm stop/objektiv)
     history_years: float = 3.0         # sa vite histori provon analisti (4h, 1h, 1 ditë; 15 min deri në 1 vit)
     use_mt5_data: bool = True          # merr historinë e XAUUSD/EURUSD/GBPUSD/BTCUSD nga MT5 kur është i hapur
     max_active: int = 4                # sa strategji luan ekipi njëkohësisht (të miratuara + provizore)
@@ -89,6 +94,7 @@ class Config:
     research_minutes: float = 10.0     # analisti i vazhdueshëm: sa shpesh provon një grup strategjish të reja
     lab_batch: int = 8                 # sa strategji provon në çdo grup
     research_symbols: int = 30         # sa monedha studion analisti (strategjitë zgjedhin 10, 20 ose 30 prej tyre)
+    trend_minutes: float = 0.0         # Fokus: raport i trendit në Telegram çdo kaq minuta (0 = i fikur)
     radar_minutes: float = 10.0        # sa shpesh rifreskohet radari i monedhave në trend
     radar_file: str = "crypto_bot_radar.json"
     research_file: str = "crypto_bot_research.json"   # gjendja e analistit të vazhdueshëm
@@ -106,7 +112,7 @@ class Config:
     alert_move_pct: float = 5.0        # njofto kur një monedhë lëviz kaq % nga njoftimi i fundit (0 = i fikur)
 
     def validate(self):
-        if self.strategy not in ("breakout", "momentum", "score", "engulf"):
+        if self.strategy not in ("breakout", "momentum", "score", "engulf", "mtf"):
             raise ValueError("strategy duhet të jetë 'breakout', 'momentum', 'score' ose 'engulf'")
         if self.alert_move_pct < 0:
             raise ValueError("alert_move_pct duhet të jetë >= 0")
@@ -120,6 +126,10 @@ class Config:
             raise ValueError("max_trades_per_day, engulf_min_rr dhe engulf_stop_buffer_atr duhet të jenë >= 0")
         if self.take_profit_pct < 0:
             raise ValueError("take_profit_pct duhet të jetë >= 0 (0 = i fikur)")
+        if self.mtf_ema < 2 or self.mtf_trigger_ema < 2 or self.mtf_min_align < 1:
+            raise ValueError("mtf_ema, mtf_trigger_ema >= 2 dhe mtf_min_align >= 1")
+        if self.mtf_trigger not in ("pullback", "breakout") or self.mtf_exit not in ("", "30m", "4h", "8h", "1d"):
+            raise ValueError("mtf_trigger: pullback ose breakout; mtf_exit: 30m, 4h, 8h, 1d ose bosh")
         if self.breakout_entry < 2 or self.breakout_exit < 2 or self.trend_ema < 2:
             raise ValueError("breakout_entry, breakout_exit dhe trend_ema duhet të jenë >= 2")
         if self.stop_loss_atr < 0 or self.daily_trend_ema < 0 or self.max_consecutive_losses < 0:
@@ -147,15 +157,17 @@ class Config:
 # lëvizjen më të fortë, dhe këmben pozicionet e dobëta me monedha më të forta. Short vetëm në simulim ose MT5.
 ACTIVE = {"strategy": "momentum", "allow_short": True, "timeframe": "4h"}
 
-# Mënyra Fokus: vetëm pesë tregje, me të dhënat e kontratave të MEXC (ari, BTC, EURUSD, GBPUSD).
-FOCUS_SYMBOLS = ["XAU/USDT", "BTC/USDT", "BTC/USD", "EUR/USDT", "GBP/USDT"]
+# Mënyra Fokus: vetëm BTCUSDT (kontrata e MEXC, me histori që nga 2020). Trendi matet nga 1 dita te 30 minutat
+# dhe hyrja bëhet në qirinjtë 15-minutësh (strategjia `mtf`). Tregjet e tjera mbeten të njohura vetëm për emrat.
+FOCUS_SYMBOLS = ["BTC/USDT"]
 DISPLAY = {"XAU/USDT": "XAUUSD", "BTC/USDT": "BTCUSDT", "BTC/USD": "BTCUSD", "EUR/USDT": "EURUSD", "GBP/USDT": "GBPUSD"}
 MT5_SYMBOLS = {"XAU/USDT": "XAUUSD", "BTC/USD": "BTCUSD", "BTC/USDT": "BTCUSD", "EUR/USDT": "EURUSD", "GBP/USDT": "GBPUSD"}
 FOCUS = {"focus": True, "exchange": "mexc_futures", "symbols": FOCUS_SYMBOLS, "scan_market": False,
          "market_filter_symbol": "", "fee_pct": 0.04, "leverage": 10.0, "risk_per_trade_pct": 0.5,
-         "max_total_risk_pct": 2.0, "position_size_pct": 100.0, "max_open_positions": 5, "stop_loss_atr": 2.0,
-         "research_symbols": 5, "strategy": "momentum", "allow_short": True, "timeframe": "4h",
-         "momentum_min_pct": 1.0, "test_days": 90}
+         "max_total_risk_pct": 2.0, "position_size_pct": 100.0, "max_open_positions": 1, "stop_loss_atr": 2.5,
+         "research_symbols": 1, "strategy": "mtf", "allow_short": True, "timeframe": "15m", "candles": 6000,
+         "mtf_ema": 50, "mtf_min_align": 4, "mtf_trigger": "pullback", "mtf_exit": "4h",
+         "momentum_min_pct": 1.0, "test_days": 90, "trend_minutes": 15.0}
 
 
 def display(symbol: str) -> str:

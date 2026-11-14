@@ -19,7 +19,7 @@ from .config import ACTIVE, FOCUS_SYMBOLS, display, load_config
 from .data import fetch_candles, fetch_daily, make_exchange, top_symbols
 from .live_chart import chart_payload, live_chart
 from .outlook import _frame_states, overview
-from .strategy import analyze
+from .strategy import analyze, live_candles
 
 PLATFORMS = ["mexc_futures", "mexc", "binance", "bybit", "mt5"]
 PLATFORM_NAMES = {"mexc_futures": "MEXC Futures (5 tregjet)", "mexc": "MEXC Spot", "binance": "Binance", "bybit": "Bybit",
@@ -299,10 +299,20 @@ def tab_chart(cfg, exchange, symbol):
             fut = False
     if live is None:
         live = _candles(cfg.exchange, symbol, tf, 500)
-    strat = _candles(cfg.exchange, symbol, cfg.timeframe, max(cfg.candles, 600))
+    strat = _candles(cfg.exchange, symbol, cfg.timeframe, max(live_candles(cfg), 600))
     closed = _closed(strat, cfg)
     daily = _daily(cfg.exchange, symbol, _cfg_json(cfg), closed.index[0], closed.index[-1])
     a = analyze(closed, cfg, symbol, daily=daily)
+    if a.get("mtf"):        # trendi nga lart poshtë: 1 ditë → 8 orë → 4 orë → 30 min; hyrja në intervalin e vogël
+        from .mtf import LABELS
+
+        word = {1: "⬆️ Lart", -1: "⬇️ Poshtë", 0: "➡️ Anash"}
+        cols = st.columns(len(a["mtf"]) + 1)
+        for col, (k, v) in zip(cols, a["mtf"].items()):
+            col.metric(f"Trendi {LABELS.get(k, k)}", word[v])
+        cols[-1].metric(f"Vendimi ({LABELS.get(cfg.timeframe, cfg.timeframe)})",
+                        {"BLI": "🟢 Blerje", "SHORT": "🔻 Short"}.get(a["signal"], "⏸ Prit"))
+        st.caption(a["signal_reason"])
     tickers = _tickers(cfg.exchange)
     price = float(live["close"].iloc[-1])
     state, mb = _read_state(cfg), Broker(_manual_cfg(cfg))
@@ -962,7 +972,7 @@ def _strip(name, selected, symbols):
 def render():
     st.subheader("📈 Roboti i tregtimit")
     base_cfg = load_config()
-    st.caption(("Fokus: XAUUSD, BTCUSDT, BTCUSD, EURUSD, GBPUSD · rreziku i hapur gjithsej deri në "
+    st.caption(("Fokus: " + ", ".join(display(x) for x in base_cfg.symbols) + " · trendi 1 ditë → 8 orë → 4 orë → 30 min, hyrja në 15 min · rreziku i hapur gjithsej deri në "
                 f"{base_cfg.max_total_risk_pct:g}% · " if base_cfg.focus else "") + "Çmime reale, para demo. Nuk është këshillë financiare.")
     base = load_config()
     _strip(base.exchange if base.exchange != "mt5" else "mexc", st.session_state.get("coin") or base.symbols[0],

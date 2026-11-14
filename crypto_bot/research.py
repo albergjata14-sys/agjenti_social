@@ -11,6 +11,8 @@ import os
 import time
 from pathlib import Path
 
+import pandas as pd
+
 from . import cache, lab, memory, notify, radar
 from .analyst import (focus_bars, candidate_config, choose, evaluate, forward_results, load_recommendation,
                       tournament_candidates)
@@ -62,12 +64,21 @@ def research_once(exchange, cfg, st: dict, log=print, now=None) -> dict:
                       radar_down=[r["symbol"] for r in rd["down"][:5]])
         except Exception as e:
             log(f"Radari dështoi: {e}")
-    if now - st.get("last_signals", 0) >= cfg.radar_minutes * 60:
+    # Fokus: në çdo qiri të ri (p.sh. çdo 15 minuta, 20 sekonda pas mbylljes) raporti i trendit dhe sinjalet.
+    slot = int((now - 20) // (cfg.trend_minutes * 60)) if cfg.focus and cfg.trend_minutes else None
+    if slot is not None and slot != st.get("trend_slot"):
+        st["trend_slot"] = slot
+        try:
+            send_trend(exchange, cfg, st, log)
+        except Exception as e:
+            log(f"Raporti i trendit dështoi: {e}")
+    if (slot is not None and st.get("signal_slot") != slot) or (slot is None and
+                                                                 now - st.get("last_signals", 0) >= cfg.radar_minutes * 60):
         try:
             send_signals(exchange, cfg, st, log)
         except Exception as e:
             log(f"Sinjalet dështuan: {e}")
-        st["last_signals"] = now
+        st["last_signals"], st["signal_slot"] = now, slot
     rec_due = now - st.get("last_rec", 0) >= cfg.analyst_hours * 3600 or not load_recommendation(cfg)
     lab_due = now - st.get("last_lab", 0) >= cfg.research_minutes * 60
     if not (rec_due or lab_due):
@@ -115,13 +126,79 @@ def research_once(exchange, cfg, st: dict, log=print, now=None) -> dict:
     return st
 
 
+def trend_config(cfg):
+    """Rregullimet e raportit të trendit: strategjia shumë-intervalëshe mbi qirinjtë e `trend_minutes`."""
+    from dataclasses import replace
+
+    tf = {15: "15m", 30: "30m", 60: "1h"}.get(int(cfg.trend_minutes), "15m")
+    return replace(cfg, strategy="mtf", timeframe=tf, allow_short=True)
+
+
+def trend_report(df, cfg, symbol: str) -> dict:
+    """Trendi i çdo intervali, vendimi dhe nivelet (hyrje, stop, objektiv) që roboti i llogarit vetë."""
+    from .config import display
+    from .mtf import ARROWS, LABELS, trend_text
+    from .strategy import analyze
+
+    tcfg = trend_config(cfg)
+    a = analyze(df, tcfg, symbol)
+    mtf, price, ind = a["mtf"], a["price"], a["indicators"]
+    up, down = sum(v > 0 for v in mtf.values()), sum(v < 0 for v in mtf.values())
+    small = 1 if price > ind["ema20"] and ind["ema20"] > ind["ema50"] else -1 if price < ind["ema20"] and ind["ema20"] < ind["ema50"] else 0
+    need = min(tcfg.mtf_min_align, len(mtf))
+    side = 1 if up >= need and not down else -1 if down >= need and not up else 0
+    if a["signal"] == "BLI":
+        verdict = "🟢 SINJAL BLERJE: të gjitha intervalet lart dhe 15 min e konfirmoi"
+    elif a["signal"] == "SHORT":
+        verdict = "🔻 SINJAL SHITJE (short): të gjitha intervalet poshtë dhe 15 min e konfirmoi"
+    elif side:
+        verdict = (f"{'🟢 Trend rritës' if side > 0 else '🔻 Trend rënës'} në të gjitha intervalet · pritet "
+                   f"{'tërheqja dhe rikthimi' if tcfg.mtf_trigger == 'pullback' else 'thyerja'} në {LABELS.get(tcfg.timeframe, tcfg.timeframe)}")
+    else:
+        verdict = f"⏸ Prit: {up} lart, {down} poshtë nga {len(mtf)} (duhen {need} në një drejtim, asnjë kundër)"
+    step = df.index[-1] - df.index[-2]
+    ch = lambda n: (price / float(df["close"].iloc[-1 - n]) - 1) * 100
+    bars = lambda minutes: max(1, int(round(pd.Timedelta(minutes=minutes) / step)))
+    text = (f"📊 {display(symbol)} · {price:,.1f} · trendi çdo {cfg.trend_minutes:g} min\n"
+            f"{trend_text(mtf)} · {LABELS.get(tcfg.timeframe, tcfg.timeframe)} {ARROWS[small]}\n{verdict}\n"
+            f"Lëvizja: {LABELS.get(tcfg.timeframe, tcfg.timeframe)} {ch(1):+.2f}% · 4 orë {ch(bars(240)):+.2f}% · 24 orë {ch(bars(1440)):+.2f}% · RSI {ind['rsi']:.0f}")
+    plan = None
+    if side or a["signal"] in ("BLI", "SHORT"):
+        d = 1 if a["signal"] == "BLI" else -1 if a["signal"] == "SHORT" else side
+        stop_pct = a["plan"]["stop_pct"]
+        r = tcfg.take_profit_r or 2.0
+        plan = {"side": d, "entry": price, "stop": price * (1 - d * stop_pct / 100),
+                "target": price * (1 + d * r * stop_pct / 100), "stop_pct": stop_pct, "r": r}
+        text += (f"\nPlani {'long' if d > 0 else 'short'}: hyrje ~{price:,.1f} · stop {plan['stop']:,.1f} "
+                 f"(−{stop_pct:.2f}%) · objektiv {plan['target']:,.1f} ({r:g}R) · rrezik {cfg.risk_per_trade_pct:g}% e buxhetit")
+    return {"text": text, "mtf": mtf, "small": small, "side": side, "signal": a["signal"], "price": price,
+            "time": a["time"], "plan": plan, "up": up, "down": down}
+
+
+def send_trend(exchange, cfg, st: dict, log=print) -> list:
+    """Raporti i trendit për çdo treg të fokusit, një herë për qiri. Gjendja ruhet edhe për panelin."""
+    from .strategy import warmup
+
+    tcfg, out = trend_config(cfg), []
+    for sym in cfg.symbols:
+        df = cache.candles(exchange, sym, tcfg.timeframe, max(cfg.candles, warmup(tcfg) + 100))
+        rep = trend_report(df, cfg, sym)
+        if st.get("trend_time", {}).get(sym) == rep["time"]:
+            continue
+        st.setdefault("trend_time", {})[sym] = rep["time"]
+        st.setdefault("trend", {})[sym] = {k: rep[k] for k in ("mtf", "small", "side", "signal", "price", "time", "plan", "text")}
+        out.append(notify.emit(cfg, "trend", sym, rep["text"]))
+        log(f"Trendi {sym}: {rep['up']} lart, {rep['down']} poshtë · {rep['signal']}")
+    return out
+
+
 def send_signals(exchange, cfg, st: dict, log=print) -> list:
     """Për çdo strategji aktive dhe çdo treg: nëse ka sinjal të ri hyrjeje, dërgon njoftim me grafik
     (hyrja, stop-loss, objektivi, rreziku). Çdo sinjal dërgohet një herë për qiri."""
     from .config import display
     from .data import fetch_candles, fetch_daily
     from .snapshot import render
-    from .strategy import analyze
+    from .strategy import analyze, warmup
 
     rec = load_recommendation(cfg)
     if not rec or rec.get("action") == "pause":
@@ -138,7 +215,7 @@ def send_signals(exchange, cfg, st: dict, log=print) -> list:
         ccfg = candidate_config(cfg, cand)
         for sym in cfg.symbols:
             try:
-                df = fetch_candles(exchange, sym, ccfg.timeframe, max(ccfg.candles, 600))
+                df = cache.candles(exchange, sym, ccfg.timeframe, max(ccfg.candles, warmup(ccfg) + 100, 600))
                 a = analyze(df, ccfg, sym, daily=fetch_daily(exchange, sym, ccfg, df))
             except Exception:
                 continue
@@ -196,4 +273,4 @@ def research_forever(exchange, cfg, log=print, parent_state: str = None):
             st["status"] = f"gabim: {e}"
             log(f"Gabim te analisti (do të riprovohet): {e}")
         _save(cfg, st)
-        time.sleep(60)
+        time.sleep(20 if cfg.focus else 60)

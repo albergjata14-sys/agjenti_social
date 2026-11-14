@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 
 from . import memory, notify
 from .data import fetch_candles, fetch_daily, spread_pct, top_symbols
-from .strategy import analyze
+from .strategy import analyze, live_candles
 
 
 def log(msg: str):
@@ -39,7 +39,7 @@ def scan(exchange, cfg, symbols=None) -> list:
     results = []
     for sym in symbols or watchlist(exchange, cfg):
         try:
-            df = fetch_candles(exchange, sym, cfg.timeframe, cfg.candles)
+            df = fetch_candles(exchange, sym, cfg.timeframe, live_candles(cfg))
             results.append(analyze(df, cfg, sym, daily=fetch_daily(exchange, sym, cfg, df)))
         except Exception as e:  # një monedhë e dështuar nuk duhet të ndalë skanimin
             if sym not in _skipped:  # njofto vetëm herën e parë, jo në çdo cikël
