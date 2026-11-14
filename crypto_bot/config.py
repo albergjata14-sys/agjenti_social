@@ -58,6 +58,8 @@ class Config:
     take_profit_r: float = 0.0         # objektivi si shumëfish i rrezikut (2 = 2× largësia e stop-it); 0 = i fikur
     test_days: int = 120               # sa ditët e fundit përdor analisti si periudhë kontrolli
     recent_days: int = 30              # periudha e shkurtër: si po sillet strategjia në ditët më të fundit
+    history_years: float = 3.0         # sa vite histori provon analisti (4h, 1h, 1 ditë; 15 min deri në 1 vit)
+    use_mt5_data: bool = True          # merr historinë e XAUUSD/EURUSD/GBPUSD/BTCUSD nga MT5 kur është i hapur
     max_active: int = 4                # sa strategji luan ekipi njëkohësisht (të miratuara + provizore)
     provisional_risk: float = 0.5      # strategjitë provizore tregtojnë me këtë pjesë të rrezikut (0.5 = gjysma)
     risk_per_trade_pct: float = 0.5    # humbja maksimale për tregti si % e kapitalit (0 = përdor vetëm position_size_pct)

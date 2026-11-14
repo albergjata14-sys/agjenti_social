@@ -132,6 +132,7 @@ def portfolio_backtest(frames: dict, cfg, market=None) -> dict:
     flag = lambda name: np.column_stack([sig[k][name].fillna(False).to_numpy(bool) for k in syms])
     o, h, l, c, score, atr = (col(n) for n in ["open", "high", "low", "close", "score", "atr"])
     buy, sell, short, cover = (flag(n) for n in ["buy", "sell", "short", "cover"])
+    last = pd.DataFrame(c).ffill().to_numpy()      # çmimi i fundit i njohur (qirinj që mungojnë: fundjavë, pushime)
     lean = col("momentum") if cfg.strategy == "momentum" else score     # pozitiv = lart, negativ = poshtë
     up = down = np.ones(len(idx), bool)
     if market is not None and cfg.market_filter_symbol and cfg.daily_trend_ema:
@@ -165,7 +166,7 @@ def portfolio_backtest(frames: dict, cfg, market=None) -> dict:
             elif short[i - 1, j] and down[i - 1]:
                 wanted.append((np.nan_to_num(-lean[i - 1, j], nan=-999.0), j, -1))
         wanted.sort(reverse=True)
-        total = cash + sum(value(p, c[i - 1, j]) for j, p in pos.items())
+        total = cash + sum(value(p, last[i - 1, j] if np.isfinite(last[i - 1, j]) else p["entry"]) for j, p in pos.items())
         for strength, j, side in wanted:
             if len(pos) >= cfg.max_open_positions:
                 if not (cfg.rotate and cfg.strategy == "momentum"):
@@ -176,6 +177,8 @@ def portfolio_backtest(frames: dict, cfg, market=None) -> dict:
                     swaps += 1
                 else:
                     break
+            if not np.isfinite(o[i, j]) or o[i, j] <= 0:
+                continue                 # qiri që mungon (p.sh. treg i mbyllur): s'ka hyrje
             stop_pct = stop_distance_pct(cfg, o[i, j], atr[i - 1, j])
             sized = size_position(cfg, total, cash, o[i, j], stop_pct, sum(position_risk(p) for p in pos.values()))
             if not sized:
@@ -201,7 +204,7 @@ def portfolio_backtest(frames: dict, cfg, market=None) -> dict:
                 else:
                     p["best"] = min(p["best"], l[i, j])
                     p["sl"] = min(p["sl"], p["best"] * (1 + t))
-        equity.append(cash + sum(value(p, c[i, j] if not np.isnan(c[i, j]) else p["entry"]) for j, p in pos.items()))
+        equity.append(cash + sum(value(p, last[i, j] if np.isfinite(last[i, j]) else p["entry"]) for j, p in pos.items()))
 
     eq = pd.Series(equity, index=idx[start:])
     monthly = eq.resample("ME").last().pct_change().dropna() * 100

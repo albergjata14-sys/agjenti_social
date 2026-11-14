@@ -1339,3 +1339,82 @@ def test_signals_grouped_with_levels(monkeypatch):
     assert "BLERJE (long) UP/USDT" in text and "Stop-loss" in text and "Objektivi" in text
     assert "Strategjia: A (✅ e miratuar)" in text and "Pajtohen edhe: B" in text and "Rreziku 0.5%" in text
     assert research.send_signals(ex, cfg, st, log=lambda *_: None) == []   # i njëjti qiri nuk dërgohet dy herë
+
+
+def _rates(start, n, step=3600, price=100.0):
+    return [[(start + k * step) * 1000, price, price + 1, price - 1, price + 0.5, 10.0] for k in range(n)]
+
+
+class _FakeMT5:
+    def __init__(self, rows=None, fail=False):
+        self.rows, self.fail, self.calls = rows, fail, []
+
+    def fetch_closed_candles(self, name, tf, limit, closed_only=True):
+        self.calls.append(name)
+        if self.fail:
+            raise RuntimeError("MT5 i mbyllur")
+        return self.rows[-limit:]
+
+    def server_tz(self, name):
+        return "Europe/Athens"
+
+
+class _FakeMexc:
+    id = "mexc_futures"
+
+    def __init__(self, rows):
+        self.rows = rows
+
+    def parse_timeframe(self, tf):
+        return 3600
+
+    def milliseconds(self):
+        return self.rows[-1][0] + 2 * 3600 * 1000
+
+    def fetch_ohlcv(self, symbol, tf, since=None, limit=1000):
+        return [r for r in self.rows if r[0] >= since][:limit]
+
+
+def test_hybrid_uses_mt5_history_in_utc_and_falls_back_to_mexc():
+    from crypto_bot.data import fetch_candles
+    from crypto_bot.hybrid import HybridExchange
+
+    winter = 1736935200          # 2025-01-15 10:00 UTC
+    mt5_rows = _rates(winter + 2 * 3600, 50)          # ora e serverit (UTC+2) e shkruar si UTC
+    mexc_rows = _rates(winter, 30, price=200.0)
+    ex = HybridExchange(_FakeMexc(mexc_rows), _FakeMT5(mt5_rows))
+    df = fetch_candles(ex, "XAU/USDT", "1h", 40)
+    assert len(df) == 40 and df["open"].iloc[0] == 100.0
+    assert df.index[-1] == pd.Timestamp((winter + 49 * 3600) * 1e9, tz="UTC")   # 12:00 server → 10:00 UTC
+    assert ex.source("XAU/USDT") == "mt5" and ex.source("BTC/USDT") == "mexc_futures"
+    btc = fetch_candles(ex, "BTC/USDT", "1h", 20)                                 # BTCUSDT: gjithmonë MEXC
+    assert btc["open"].iloc[-1] == 200.0 and ex.mt5.calls == ["XAUUSD"]
+    down = HybridExchange(_FakeMexc(mexc_rows), _FakeMT5(fail=True))
+    df = fetch_candles(down, "EUR/USDT", "1h", 20)
+    assert len(df) == 20 and df["open"].iloc[-1] == 200.0 and "EUR/USDT" in down.errors
+
+
+def test_focus_bars_and_yearly_returns():
+    from crypto_bot.analyst import focus_bars, yearly
+
+    bars = focus_bars(Config(history_years=3))
+    assert bars["4h"] == 6570 and bars["1h"] == 26280 and bars["15m"] == 35040 and bars["1d"] >= 1095
+    idx = pd.date_range("2023-01-01", periods=1100, freq="D", tz="UTC")
+    eq = pd.Series(np.linspace(1000, 1300, 1100), index=idx)
+    eq.iloc[-365:] = np.linspace(1300, 1200, 365)
+    ys = yearly(eq, 3)
+    assert len(ys) == 3 and ys[0]["return_pct"] < 0 and ys[1]["return_pct"] > 0 and ys[2]["return_pct"] > 0
+    assert yearly(eq.iloc[-200:], 3) == []
+
+
+def test_cache_keeps_sources_apart(tmp_path, monkeypatch):
+    from crypto_bot import cache
+    from crypto_bot.hybrid import HybridExchange
+
+    monkeypatch.setattr(cache, "DIR", str(tmp_path))
+    winter = 1736935200
+    ex = HybridExchange(_FakeMexc(_rates(winter, 80, price=200.0)), _FakeMT5(_rates(winter, 80)), tz="UTC")
+    cache.candles(ex, "XAU/USDT", "1h", 60)
+    cache.candles(ex.mexc, "XAU/USDT", "1h", 60)
+    names = sorted(p.name for p in tmp_path.iterdir())
+    assert names == ["mexc_futures_XAU_USDT_1h.pkl", "mt5_XAU_USDT_1h.pkl"]

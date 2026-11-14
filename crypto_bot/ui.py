@@ -735,19 +735,27 @@ def tab_analyst(cfg, exchange):
         if "error" in r:
             continue
         f = fwd_now.get(r["id"]) or fwd.get(r["id"]) or {}
+        lg = r.get("long") or {}
+        yrs = lg.get("years") or []
         state = ("✅ e miratuar" if r["id"] in rec.get("approved", []) else
                  "🟡 provizore" if r["id"] in rec.get("provisional", []) else "–")
         rows.append({"Strategjia": r["name"], "Statusi": state, "Interval": r["overrides"].get("timeframe", ""),
                      "Mësimi %": r["train"]["return_pct"], "Kontrolli %": r["test"]["return_pct"],
                      "30 ditë %": (r.get("recent") or {}).get("return_pct"),
+                     "Gjithë historia %": lg.get("return_pct"),
+                     "Vite me fitim": f"{lg.get('years_up', 0)}/{len(yrs)}" if yrs else "",
+                     "Vit për vit %": " · ".join(f"{y['return_pct']:+.0f}" for y in yrs),
                      "Rënia maks. %": r["test"]["drawdown_pct"], "Tregti": r["test"]["trades"],
                      "Turne live %": f.get("return_pct"), "Tregti live": f.get("trades")})
     st.dataframe(pd.DataFrame(rows), width="stretch", hide_index=True, column_config={
         "Mësimi %": st.column_config.NumberColumn(format="%+.1f"),
         "Kontrolli %": st.column_config.NumberColumn(format="%+.1f"),
         "30 ditë %": st.column_config.NumberColumn(format="%+.1f", help="Si po sillet në ditët më të fundit"),
+        "Gjithë historia %": st.column_config.NumberColumn(format="%+.1f", help=f"E gjithë historia, deri në {cfg.history_years:g} vjet"),
+        "Vit për vit %": st.column_config.TextColumn(help="Fitimi i çdo viti të fundit, nga më i riu"),
         "Turne live %": st.column_config.NumberColumn(format="%+.2f", help="Prova në kohë reale me para demo që nga nisja e turneut")})
-    st.caption(f"✅ e miratuar: fitoi në periudhën e vjetër dhe në {rec.get('test_days', cfg.test_days)} ditët e fundit · "
+    st.caption(f"✅ e miratuar: fitoi në periudhën e vjetër, në {rec.get('test_days', cfg.test_days)} ditët e fundit dhe "
+               f"(kur ka histori 2–3 vjeçare) në të gjithë historinë, me të paktën gjysmën e viteve me fitim · "
                f"🟡 provizore: fitoi në ditët e fundit dhe nuk po humbet në 30 ditët e fundit, por periudha e vjetër "
                f"doli negative, ndaj tregton me {cfg.provisional_risk * 100:.0f}% të rrezikut.")
     _lessons(cfg)

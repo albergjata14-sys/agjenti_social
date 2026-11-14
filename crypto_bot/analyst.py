@@ -67,6 +67,33 @@ FOCUS_CANDIDATES = [
 FOCUS_TIMEFRAMES = {"15m": 10000, "1h": 5000, "4h": 5000, "1d": 1000}
 
 
+def focus_bars(cfg) -> dict:
+    """Sa qirinj shkarkohen për çdo interval që provat të mbulojnë `history_years` vite (15 min: deri në 1 vit)."""
+    years = max(float(getattr(cfg, "history_years", 0) or 0), 0.0)
+    if years <= 0:
+        return dict(FOCUS_TIMEFRAMES)
+    days = 365 * years
+    return {"15m": max(10000, int(min(years, 1.0) * 365 * 96)), "1h": max(5000, int(days * 24)),
+            "4h": max(5000, int(days * 6)), "1d": max(1000, int(days) + 250)}
+
+
+def yearly(eq: pd.Series, years: int = 3) -> list:
+    """Fitimi i çdo viti të fundit (365 ditë), nga më i riu. Viti më i vjetër pranohet kur historia mbulon
+    të paktën 9 muaj prej tij (provat nisin pas qirinjve të nevojshëm për treguesit)."""
+    out = []
+    if eq is None or len(eq) < 2:
+        return out
+    end = eq.index[-1]
+    for k in range(years):
+        hi, lo = end - pd.Timedelta(days=365 * k), end - pd.Timedelta(days=365 * (k + 1))
+        if lo < eq.index[0] - pd.Timedelta(days=95):
+            break
+        a, b = eq[:lo], eq[:hi]
+        start = float(a.iloc[-1]) if len(a) else float(eq.iloc[0])
+        out.append({"from": str(lo.date()), "to": str(hi.date()), "return_pct": round((float(b.iloc[-1]) / start - 1) * 100, 2)})
+    return out
+
+
 def base_candidates(cfg) -> list:
     return FOCUS_CANDIDATES if cfg.focus else CANDIDATES
 
@@ -112,7 +139,8 @@ def load_frames(exchange, cfg, symbols, timeframe: str, candles: int, fetch=None
     for sym in symbols:
         try:
             df = fetch(exchange, sym, timeframe, candles)
-            if len(df) >= candles * min_frac:
+            # Me `min_frac` të ulët (fokusi) pranohen edhe tregjet e reja që kanë të paktën 600 qirinj.
+            if len(df) >= (min(candles * min_frac, 600) if min_frac < 0.5 else candles * min_frac):
                 days = (df.index[-1] - df.index[0]).days + 160
                 daily = df if timeframe == "1d" else fetch(exchange, sym, "1d", days)
                 frames[sym] = (df, daily)
@@ -164,16 +192,26 @@ def evaluate(frames_by_tf: dict, base_cfg, candidates=None, test_days: int = Non
             # Periudha e shkurtër: si po sillet në ditët më të fundit (tregu ndryshon).
             recent = _slice(frames, recent_cut, None, pad)
             r_re = portfolio_backtest(recent, cfg, _slice({"m": market}, recent_cut, None, pad).get("m") if market else None)
+            # E gjithë historia (deri në 2–3 vjet), dhe fitimi vit për vit.
+            r_all = portfolio_backtest(frames, cfg, market)
         except Exception as e:
             rows.append({**cand, "error": str(e)})
             continue
-        ok = bool(r_tr["return_pct"] > 0 and r_te["return_pct"] > 0 and r_te["trades"] >= min_trades)
+        years = yearly(r_all["equity"], max(int(round(getattr(base_cfg, "history_years", 0) or 0)), 1))
+        up = sum(1 for y in years if y["return_pct"] > 0)
+        long_ok = len(years) < 2 or (r_all["return_pct"] > 0 and up * 2 >= len(years))
+        ok = bool(r_tr["return_pct"] > 0 and r_te["return_pct"] > 0 and r_te["trades"] >= min_trades and long_ok)
         if cand.get("status") == "turne":
             ok = False      # strategjitë e reja të laboratorit janë të paktën provizore derisa të kalojnë turneun
         # Provizore: fiton qartë në periudhën e kontrollit dhe nuk po humbet në ditët e fundit, edhe pse
         # periudha e vjetër doli negative (tregu ka ndryshuar). Tregton me rrezik më të vogël.
-        prov = bool(not ok and r_te["return_pct"] > 0 and r_re["return_pct"] >= 0 and r_te["trades"] >= min_trades)
-        rows.append({**cand, "train": _summary(r_tr), "test": _summary(r_te), "recent": _summary(r_re), "eligible": ok,
+        # Në afat të gjatë nuk lejohet as provizore një strategji që e ka humbur shumicën e viteve.
+        prov = bool(not ok and r_te["return_pct"] > 0 and r_re["return_pct"] >= 0 and r_te["trades"] >= min_trades
+                    and (len(years) < 2 or up >= 1 and r_all["return_pct"] > -10))
+        days = (r_all["equity"].index[-1] - r_all["equity"].index[0]).days if len(r_all["equity"]) else 0
+        long = {**_summary(r_all), "days": int(days), "years": years, "years_up": up, "ok": bool(long_ok)}
+        rows.append({**cand, "train": _summary(r_tr), "test": _summary(r_te), "recent": _summary(r_re), "long": long,
+                     "eligible": ok,
                      "provisional": prov, "train_from": r_tr["from"], "test_from": r_te["from"], "test_to": r_te["to"]})
     return rows
 
@@ -250,10 +288,11 @@ def analyze_market(exchange, base_cfg, n_symbols: int = 20, test_days: int = Non
         symbols.append(base_cfg.market_filter_symbol)
     candidates = tournament_candidates(base_cfg)
     run_lab = lab_due(base_cfg) if run_lab is None else run_lab
-    need = dict(FOCUS_TIMEFRAMES) if base_cfg.focus else ({"4h": 5000, "1h": 4000} if run_lab else {})
+    need = focus_bars(base_cfg) if base_cfg.focus else ({"4h": 5000, "1h": 4000} if run_lab else {})
     for cand in candidates:
         tf = cand["overrides"].get("timeframe", base_cfg.timeframe)
-        need[tf] = 5000 if tf in ("4h", "1d") else 4000
+        if not base_cfg.focus:
+            need[tf] = 5000 if tf in ("4h", "1d") else 4000
     frames_by_tf = {}
     for tf, n in need.items():
         log(f"Analisti po shkarkon {n} qirinj {tf} për {len(symbols)} monedha...")

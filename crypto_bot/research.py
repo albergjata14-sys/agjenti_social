@@ -12,7 +12,7 @@ import time
 from pathlib import Path
 
 from . import cache, lab, memory, notify, radar
-from .analyst import (FOCUS_TIMEFRAMES, candidate_config, choose, evaluate, forward_results, load_recommendation,
+from .analyst import (focus_bars, candidate_config, choose, evaluate, forward_results, load_recommendation,
                       tournament_candidates)
 from .data import top_symbols
 
@@ -40,10 +40,10 @@ def _save(cfg, st):
 def _frames(exchange, cfg, symbols):
     from .analyst import load_frames
 
-    if cfg.focus:   # afate të shkurtra dhe të gjata: 15 minuta, 1 orë, 4 orë dhe 1 ditë
+    if cfg.focus:   # afate të shkurtra dhe të gjata (deri në 3 vjet): 15 minuta, 1 orë, 4 orë dhe 1 ditë
         # ari ka më pak histori (kontrata e re), ndaj pranohen edhe historitë më të shkurtra
         return {tf: load_frames(exchange, cfg, symbols, tf, n, fetch=cache.candles, min_frac=0.15)
-                for tf, n in FOCUS_TIMEFRAMES.items()}
+                for tf, n in focus_bars(cfg).items()}
     return {"4h": load_frames(exchange, cfg, symbols, "4h", 5000, fetch=cache.candles),
             "1h": load_frames(exchange, cfg, symbols, "1h", 4000, fetch=cache.candles)}
 

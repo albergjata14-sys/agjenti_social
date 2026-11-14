@@ -189,6 +189,26 @@ Rezultati i parë (nëntor 2026): asnjë nga 5 strategjitë bazë nuk fitoi në 
 në periudhën e mësimit, disa fituan në 90 ditët e fundit), ndaj analisti rekomandoi pushim. Laboratori provoi
 120 strategji të reja; 25 fituan në të dyja periudhat dhe më të mirat hynë në turne.
 
+### Historia 2–3 vjeçare dhe të dhënat nga MT5
+
+Analisti nuk i gjykon strategjitë vetëm në ditët e fundit: çdo strategji provohet mbi **`history_years` vite
+(parazgjedhur 3)** në 4 orë, 1 orë dhe 1 ditë (15 minutat deri në 1 vit), dhe tabela e analistit tregon
+**“Gjithë historia %”**, **“Vite me fitim”** (p.sh. 2/3) dhe fitimin **vit për vit**. Një strategji miratohet
+vetëm kur fiton edhe në afat të gjatë, me të paktën gjysmën e viteve me fitim; ajo që ka humbur shumicën e viteve
+nuk lejohet as si provizore.
+
+MEXC e ka arin vetëm nga maji 2026 dhe EURUSD/GBPUSD nga prilli 2025. Kur **MetaTrader 5 është i hapur** në
+kompjuter, historia e **XAUUSD, EURUSD, GBPUSD dhe BTCUSD** merret nga MT5 (orët e serverit kthehen në UTC);
+BTCUSDT mbetet nga MEXC. Nëse MT5 është i mbyllur, roboti vazhdon me MEXC pa u ndalur. Hapat:
+
+1. `pip install MetaTrader5` (vetëm në Windows) dhe hap terminalin MT5 të kyçur në llogarinë demo.
+2. Te **Market Watch** shfaq XAUUSD, EURUSD, GBPUSD, BTCUSD.
+3. Te MT5: *Tools → Options → Charts → Max bars in chart* = `Unlimited` (ose ≥ 100000), që të jepet historia e plotë.
+4. Nis `start_ekipi.bat`. Në dritare shfaqet “Historia ... merret nga MetaTrader 5”.
+
+Për ta çaktivizuar: `"use_mt5_data": false` te `config.json`. Historia ruhet në `crypto_bot_cache/`
+(skedarë të veçantë për MT5 dhe MEXC), ndaj shkarkimi i gjatë bëhet vetëm herën e parë.
+
 ### Analisti i vazhdueshëm dhe radari
 
 Kur nis ekipi (`nis --ekip` ose `start_ekipi.bat`), nis vetë në sfond edhe **analisti i vazhdueshëm**

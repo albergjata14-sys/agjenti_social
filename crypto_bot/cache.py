@@ -13,13 +13,21 @@ from .data import fetch_candles
 DIR = os.environ.get("CRYPTO_BOT_CACHE", "crypto_bot_cache")
 
 
-def _path(symbol: str, timeframe: str) -> Path:
-    return Path(DIR) / f"{symbol.replace('/', '_').replace(':', '_')}_{timeframe}.pkl"
+def _path(symbol: str, timeframe: str, source: str = "") -> Path:
+    name = f"{symbol.replace('/', '_').replace(':', '_')}_{timeframe}"
+    return Path(DIR) / (f"{source}_{name}.pkl" if source else f"{name}.pkl")
+
+
+def _source(exchange, symbol: str) -> str:
+    """Çdo burim (MEXC, MT5...) ka skedarët e vet, që historitë të mos përzihen."""
+    if hasattr(exchange, "source"):
+        return exchange.source(symbol)
+    return str(getattr(exchange, "id", "") or "")
 
 
 def candles(exchange, symbol: str, timeframe: str, limit: int) -> pd.DataFrame:
     """Qirinjtë e mbyllur të fundit `limit`, nga disku kur ka dhe nga platforma vetëm për pjesën që mungon."""
-    p = _path(symbol, timeframe)
+    p = _path(symbol, timeframe, _source(exchange, symbol))
     old = None
     if p.exists():
         try:

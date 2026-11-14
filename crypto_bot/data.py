@@ -12,7 +12,12 @@ def make_exchange(cfg, with_keys: bool = False):
     if cfg.exchange == "mexc_futures":
         from .futures import MexcFuturesExchange
 
-        return MexcFuturesExchange()      # kontratat e MEXC: ari, BTC, EURUSD, GBPUSD (vetëm lexim)
+        ex = MexcFuturesExchange()        # kontratat e MEXC: ari, BTC, EURUSD, GBPUSD (vetëm lexim)
+        if cfg.focus:                     # historia e gjatë nga MT5 kur terminali është i hapur
+            from .hybrid import with_mt5
+
+            return with_mt5(ex, cfg)
+        return ex
     if cfg.exchange.lower() in ("mt5", "metatrader5", "metatrader"):
         from .mt5 import MT5Exchange
 
