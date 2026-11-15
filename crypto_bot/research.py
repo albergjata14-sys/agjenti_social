@@ -14,7 +14,7 @@ from pathlib import Path
 import pandas as pd
 
 from . import cache, lab, memory, notify, radar
-from .analyst import (focus_bars, candidate_config, choose, evaluate, forward_results, load_recommendation,
+from .analyst import (focus_bars, scope, candidate_config, choose, evaluate, forward_results, load_recommendation,
                       tournament_candidates)
 from .data import top_symbols
 
@@ -79,7 +79,9 @@ def research_once(exchange, cfg, st: dict, log=print, now=None) -> dict:
         except Exception as e:
             log(f"Sinjalet dështuan: {e}")
         st["last_signals"], st["signal_slot"] = now, slot
-    rec_due = now - st.get("last_rec", 0) >= cfg.analyst_hours * 3600 or not load_recommendation(cfg)
+    # Rekomandim i vjetër për tregje të tjera (p.sh. para kalimit te vetëm BTCUSDT) nuk vlen: rivlerëso menjëherë.
+    rec_due = (now - st.get("last_rec", 0) >= cfg.analyst_hours * 3600
+               or (load_recommendation(cfg) or {}).get("scope") != scope(cfg))
     lab_due = now - st.get("last_lab", 0) >= cfg.research_minutes * 60
     if not (rec_due or lab_due):
         return st
@@ -110,6 +112,7 @@ def research_once(exchange, cfg, st: dict, log=print, now=None) -> dict:
         rows = evaluate(frames, cfg, tournament_candidates(cfg))
         rec = choose(rows, forward_results(cfg), cfg.max_active)
         rec.update({"time": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now)), "ts": now, "test_days": cfg.test_days,
+                    "scope": scope(cfg),
                     "symbols": len(frames["4h"]), "results": rows, "forward": forward_results(cfg),
                     "lab_tested": st.get("tested_total", 0), "lab_passed": st.get("passed_total", 0)})
         Path(cfg.recommendation_file).write_text(json.dumps(rec, indent=2, ensure_ascii=False))
@@ -201,7 +204,7 @@ def send_signals(exchange, cfg, st: dict, log=print) -> list:
     from .strategy import analyze, warmup
 
     rec = load_recommendation(cfg)
-    if not rec or rec.get("action") == "pause":
+    if not rec or rec.get("action") == "pause" or rec.get("scope") != scope(cfg):
         return []
     status = {i: "✅ e miratuar" for i in rec.get("approved", [])}
     status.update({i: "🟡 provizore" for i in rec.get("provisional", [])})
@@ -255,7 +258,10 @@ def send_signals(exchange, cfg, st: dict, log=print) -> list:
 def research_forever(exchange, cfg, log=print, parent_state: str = None):
     """Analisti që nuk ndalet. Me `parent_state` mbyllet vetë kur ekipi që e nisi nuk punon më."""
     st = status(cfg) or {"started": time.time()}
-    st.update(pid=os.getpid(), started=st.get("started", time.time()))
+    if st.get("scope") != scope(cfg):          # gjendje e mbetur nga tregje të tjera: nis numërimin nga e para
+        st = {"started": time.time()}
+    st.update(pid=os.getpid(), started=st.get("started", time.time()), scope=scope(cfg))
+    _save(cfg, st)
     log("Analisti i vazhdueshëm u nis: radar çdo %g min, strategji të reja çdo %g min, rivlerësim çdo %g orë."
         % (cfg.radar_minutes, cfg.research_minutes, cfg.analyst_hours))
     while True:
@@ -267,6 +273,9 @@ def research_forever(exchange, cfg, log=print, parent_state: str = None):
             if time.time() - hb > 1800:
                 log("Ekipi nuk punon më; analisti ndalet.")
                 break
+        if (status(cfg) or {}).get("pid", os.getpid()) != os.getpid():
+            log("Një analist tjetër ka marrë punën; ky ndalet.")
+            break
         try:
             st = research_once(exchange, cfg, st, log)
         except Exception as e:

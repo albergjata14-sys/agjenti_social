@@ -1,5 +1,6 @@
 """Cikli kryesor i robotit: skanon tregun, analizon, hap dhe mbyll pozicione."""
 import json
+import os
 import time
 from dataclasses import replace
 from pathlib import Path
@@ -308,19 +309,31 @@ def run_team_cycle(exchange, base_cfg, rec, tournament: bool = True) -> dict:
     """Një cikël i ekipit. Strategjitë aktive (të miratuara + provizore) tregtojnë, secila me pjesën e saj të
     kapitalit; kur një strategji del nga lista dhe s'ka pozicione, kapitali i saj kthehet te "rezerva" dhe i
     jepet strategjisë së re. Turneu i provon të gjitha me gjithë kapitalin demo. Kthen gjendjen e përbashkët."""
-    from .analyst import team_config, tournament_candidates, tournament_config
+    from .analyst import scope, team_config, tournament_candidates, tournament_config
     from .broker import Broker
 
     cache = CycleCache(exchange)
     rec = rec or {}
+    if rec.get("scope") != scope(base_cfg):
+        rec = {}                # rekomandim për tregje të tjera: prit analistin, mos hap asgjë
     approved, provisional = set(rec.get("approved", [])), set(rec.get("provisional", []))
     active = approved | provisional
     try:
         prev = json.loads(Path(base_cfg.state_file).read_text())
     except (OSError, ValueError):
         prev = {}
+    if prev.get("team") and prev.get("scope") != scope(base_cfg):
+        # Roboti kaloi te tregje të tjera (p.sh. nga shumë monedha te vetëm BTCUSDT): pozicionet dhe kapitali i
+        # ekipit të vjetër mbyllen dhe ekipi nis nga e para. Historia mbetet te kujtesa.
+        stem = Path(base_cfg.state_file)
+        for old in stem.parent.glob(stem.stem + "_ekip_*.json"):
+            old.unlink()
+        for old in stem.parent.glob(stem.stem + "_turne_*.json"):
+            old.unlink()
+        prev = {}
     pool = float(prev.get("pool", base_cfg.paper_balance))
-    team = {"team": True, "live": False, "heartbeat": time.time(), "cash": 0.0, "positions": {}, "trades": [],
+    team = {"scope": scope(base_cfg),
+            "team": True, "live": False, "heartbeat": time.time(), "cash": 0.0, "positions": {}, "trades": [],
             "members": [], "approved": sorted(approved), "provisional": sorted(provisional),
             "recommendation": rec.get("name")}
     cands = {c["id"]: c for c in tournament_candidates(base_cfg)}
@@ -405,12 +418,27 @@ def ensure_research(cfg):
 
     from .research import is_alive, status
 
+    from .analyst import scope
+
     st = status(cfg)
-    if st and is_alive(cfg, st):
+    stale = bool(st) and st.get("scope") != scope(cfg)
+    if st and is_alive(cfg, st) and not stale:
         return
     started = getattr(ensure_research, "_last", 0)
     if time.time() - started < 600:        # i dhamë kohë të nisë; mos e nis dy herë
         return
+    if stale:      # analist i vjetër që punon për tregje të tjera (p.sh. para kalimit te vetëm BTCUSDT): ndalet
+        try:
+            import signal
+
+            os.kill(int(st.get("pid", 0)), signal.SIGTERM)
+        except Exception:
+            pass
+        try:
+            Path(cfg.research_file).unlink()
+        except OSError:
+            pass
+        log("Analisti i vjetër u ndal; po niset analisti për " + scope(cfg) + ".")
     ensure_research._last = time.time()
     conf = cfg.state_file.replace(".json", "_analist_config.json")
     Path(conf).write_text(json.dumps(asdict(cfg), indent=2))
@@ -423,7 +451,7 @@ def ensure_research(cfg):
 
 def run_team_forever(exchange, base_cfg, tournament: bool = True):
     """Tregtari i ekipit: rifreskon rekomandimin e analistit kur vjetrohet dhe luan strategjitë e miratuara."""
-    from .analyst import analyze_market, load_recommendation
+    from .analyst import analyze_market, load_recommendation, scope
 
     stop = stop_file(base_cfg)
     stop.unlink(missing_ok=True)
@@ -455,7 +483,8 @@ def run_team_forever(exchange, base_cfg, tournament: bool = True):
             rec = load_recommendation(base_cfg)
             if base_cfg.research:
                 ensure_research(base_cfg)        # analisti punon më vete; tregtari vetëm lexon rekomandimin
-            elif not rec or time.time() - rec.get("ts", 0) > base_cfg.analyst_hours * 3600:
+            elif (not rec or time.time() - rec.get("ts", 0) > base_cfg.analyst_hours * 3600
+                  or rec.get("scope") != scope(base_cfg)):
                 try:
                     rec = analyze_market(exchange, base_cfg, log=log)
                     text = (f"🧠 Analisti: {'pushim, asnjë strategji e miratuar' if rec['action'] == 'pause' else 'miratoi ' + ', '.join(rec['approved'])}")

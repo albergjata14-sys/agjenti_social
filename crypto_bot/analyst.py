@@ -70,6 +70,11 @@ FOCUS_CANDIDATES = [
 FOCUS_TIMEFRAMES = {"15m": 10000, "30m": 8000, "1h": 5000, "4h": 5000, "8h": 2500, "1d": 1000}
 
 
+def scope(cfg) -> str:
+    """Çfarë tregton roboti: kur ndryshon (p.sh. nga shumë monedha te vetëm BTCUSDT), ekipi nis nga e para."""
+    return "fokus:" + ",".join(cfg.symbols) if cfg.focus else "treg"
+
+
 def focus_bars(cfg) -> dict:
     """Sa qirinj shkarkohen për çdo interval që provat të mbulojnë `history_years` vite. Platforma jep aq sa ka
     (MEXC: rreth 1 vit në 15 minuta, më shumë në intervalet e mëdha)."""
@@ -313,7 +318,7 @@ def analyze_market(exchange, base_cfg, n_symbols: int = 20, test_days: int = Non
     rows = evaluate(frames_by_tf, base_cfg, candidates, test_days=test_days)
     fwd = forward_results(base_cfg)
     rec = choose(rows, fwd, base_cfg.max_active)
-    rec.update({"time": datetime.now(timezone.utc).isoformat(timespec="seconds"), "ts": time.time(),
+    rec.update({"time": datetime.now(timezone.utc).isoformat(timespec="seconds"), "ts": time.time(), "scope": scope(base_cfg),
                 "test_days": test_days, "symbols": len(frames_by_tf.get("4h", {})), "results": rows, "forward": fwd,
                 "seconds": round(time.time() - t0), "lab_tested": len(lab_rows),
                 "lab_passed": sum(1 for r in lab_rows if r.get("eligible"))})

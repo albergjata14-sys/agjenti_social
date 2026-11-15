@@ -22,12 +22,12 @@ from .outlook import _frame_states, overview
 from .strategy import analyze, live_candles
 
 PLATFORMS = ["mexc_futures", "mexc", "binance", "bybit", "mt5"]
-PLATFORM_NAMES = {"mexc_futures": "MEXC Futures (5 tregjet)", "mexc": "MEXC Spot", "binance": "Binance", "bybit": "Bybit",
+PLATFORM_NAMES = {"mexc_futures": "MEXC Futures (BTCUSDT)", "mexc": "MEXC Spot", "binance": "Binance", "bybit": "Bybit",
                   "mt5": "MetaTrader 5"}
-TIMEFRAMES = ["15m", "1h", "4h", "1d"]
+TIMEFRAMES = ["15m", "30m", "1h", "4h", "8h", "1d"]
 CHART_TIMEFRAMES = ["1m", "5m", "15m", "1h", "4h", "1d"]
 MARKETS = ["Futures", "Spot"]
-STRATEGIES = ["breakout", "momentum", "score", "engulf"]
+STRATEGIES = ["mtf", "breakout", "momentum", "score", "engulf"]
 FAVORITES = ["BTC/USDT", "ETH/USDT", "SOL/USDT", "XRP/USDT", "BNB/USDT", "DOGE/USDT"]
 UI_CONFIG = "crypto_bot_ui_config.json"
 REFRESH = 5    # sekonda mes rifreskimeve të grafikut të gjallë
@@ -723,9 +723,9 @@ def tab_analyst(cfg, exchange):
     _research_panel(cfg)
     rec = analyst.load_recommendation(cfg)
     c = st.columns([1, 1])
-    n = 5 if cfg.focus else c[0].select_slider("Sa monedha", [10, 20, 30], 20, key="analyst_n")
+    n = len(cfg.symbols) if cfg.focus else c[0].select_slider("Sa monedha", [10, 20, 30], 20, key="analyst_n")
     if cfg.focus:
-        c[0].markdown("**5 tregjet e Fokusit** · intervalet 15m, 1h, 4h, 1d")
+        c[0].markdown("**Fokusi: " + ", ".join(display(x) for x in cfg.symbols) + "** · intervalet 15m, 30m, 1h, 4h, 8h, 1d")
     if c[1].button("🧠 Analizo tani", type="primary", width="stretch"):
         with st.spinner("Analisti po shkarkon historinë dhe po provon strategjitë (1–3 minuta)..."):
             rec = analyst.analyze_market(exchange, cfg, n_symbols=n, log=lambda *_: None)
@@ -923,6 +923,22 @@ def _settings(tickers):
     symbol = pick or base.symbols[0]
     if pick == "Tjetër":
         symbol = st.text_input("Shkruaj monedhën (p.sh. PEPE/USDT ose XAUUSD në MT5)", "PEPE/USDT").strip().upper()
+    if base.focus:
+        # Fokusi: rregullimet vijnë nga config.json (strategjia shumë-intervalëshe); asgjë nuk mbishkruhet nga paneli.
+        with st.expander("⚙️ Mënyra: Fokus " + display(symbol) + " · rregullimet"):
+            st.markdown(f"**Strategjia:** shumë-intervale (trendi 1 ditë → 8 orë → 4 orë → 30 min, hyrja në {base.timeframe})  \n"
+                        f"**Stop-loss:** {base.stop_loss_atr:g} × ATR · **Objektivi:** "
+                        f"{(str(base.take_profit_r) + 'R') if base.take_profit_r else 'i hapur, dalje kur kthehet trendi ' + base.mtf_exit}  \n"
+                        f"**Rreziku:** {base.risk_per_trade_pct:g}% për tregti, gjithsej deri në {base.max_total_risk_pct:g}% · "
+                        f"levë {base.leverage:g}× · raport trendi çdo {base.trend_minutes:g} min")
+            st.caption("Ndryshohen te `crypto_bot/config.json`.")
+        try:
+            cfg = replace(base, symbols=[symbol]).validate()
+            cfg.data_tz = "UTC"
+            return cfg, _exchange(cfg.exchange), symbol
+        except Exception as e:
+            st.error(f"Gabim: {e}")
+            return None
     mode = st.session_state.get("mode", list(MODES)[0])
     # Në telefon grafiku duhet të duket shpejt: mënyra dhe rregullimet rrinë të mbledhura në një vend.
     with st.expander(f"⚙️ Mënyra: {mode.split(' (')[0]} · rregullimet"):

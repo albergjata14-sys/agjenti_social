@@ -1007,14 +1007,14 @@ def test_analyst_approves_and_team_trades(tmp_path):
                           {"id": "n", "name": "N", "overrides": {"strategy": "momentum", "timeframe": "4h",
                                                                    "allow_short": False, "momentum_days": 2.0}}]
     try:
-        team = run_team_cycle(ex, cfg, {"approved": ["m"], "name": "M"}, tournament=True)
+        team = run_team_cycle(ex, cfg, {"approved": ["m"], "name": "M", "scope": "treg"}, tournament=True)
         members = {m["id"]: m for m in team["members"]}
         assert set(members) == {"m"} and members["m"]["approved"]               # vetëm strategjitë aktive tregtojnë
         assert members["m"]["open"] == 1 and members["m"]["capital"] == pytest.approx(500)   # 1000 / max_active 2
         assert team["pool"] == pytest.approx(500)                                # pjesa tjetër pret në rezervë
         assert team["last_equity"] == pytest.approx(1000, rel=0.01)
         # "n" bëhet provizore: merr kapital nga rezerva dhe tregton me gjysmën e rrezikut.
-        team2 = run_team_cycle(ex, cfg, {"approved": ["m"], "provisional": ["n"], "name": "M"}, tournament=False)
+        team2 = run_team_cycle(ex, cfg, {"approved": ["m"], "provisional": ["n"], "name": "M", "scope": "treg"}, tournament=False)
         m2 = {m["id"]: m for m in team2["members"]}
         assert m2["n"]["provisional"] and m2["n"]["capital"] == pytest.approx(500, rel=0.01) and team2["pool"] == pytest.approx(0, abs=1)
         # Kur "n" del nga lista dhe s'ka pozicione, kapitali i saj kthehet te rezerva.
@@ -1022,7 +1022,7 @@ def test_analyst_approves_and_team_trades(tmp_path):
         st = json.loads(nfile.read_text())
         st["positions"] = {}
         nfile.write_text(json.dumps(st))
-        team3 = run_team_cycle(ex, cfg, {"approved": ["m"], "name": "M"}, tournament=False)
+        team3 = run_team_cycle(ex, cfg, {"approved": ["m"], "name": "M", "scope": "treg"}, tournament=False)
         assert {m["id"] for m in team3["members"]} == {"m"} and not nfile.exists() and team3["pool"] > 0
     finally:
         analyst.CANDIDATES = real
@@ -1331,7 +1331,7 @@ def test_signals_grouped_with_levels(monkeypatch):
              {"id": "b", "name": "B", "overrides": {"strategy": "momentum", "momentum_days": 3.0, "timeframe": "4h",
                                                      "stop_loss_atr": 2.0}}]
     monkeypatch.setattr(research, "tournament_candidates", lambda c: cands)
-    monkeypatch.setattr(research, "load_recommendation", lambda c: {"action": "trade", "approved": ["a"], "provisional": ["b"]})
+    monkeypatch.setattr(research, "load_recommendation", lambda c: {"action": "trade", "approved": ["a"], "provisional": ["b"], "scope": "fokus:UP/USDT"})
     st = {}
     sent = research.send_signals(ex, cfg, st, log=lambda *_: None)
     assert len(sent) == 1                                                  # dy strategji, një mesazh
@@ -1478,3 +1478,29 @@ def test_trend_report_every_15_minutes(tmp_path, monkeypatch):
     lines = (tmp_path / "n.jsonl").read_text().strip().splitlines()
     assert len(lines) == 1 and json.loads(lines[0])["kind"] == "trend"
     assert st["trend"]["BTC/USDT"]["side"] == 1
+
+
+def test_team_restarts_when_markets_change(tmp_path):
+    from crypto_bot import analyst
+    from crypto_bot.bot import run_team_cycle
+
+    cfg = Config(symbols=["UP/USDT"], candles=300, strategy="momentum", momentum_days=2, momentum_ema=20,
+                 daily_trend_ema=0, market_filter_symbol="", state_file=str(tmp_path / "s.json"),
+                 log_file=str(tmp_path / "d.jsonl"), scan_top_n=2, max_active=2, memory_file="")
+    ex = make_fake({"UP/USDT": trend(400, 100, 0.003)})
+    ex.t = {"UP/USDT": {"quoteVolume": 9}}
+    # Gjendje e vjetër e ekipit nga tregje të tjera: rezervë e vogël dhe pjesë strategjish që nuk ekzistojnë më.
+    (tmp_path / "s.json").write_text(json.dumps({"team": True, "scope": "fokus:XAU/USDT", "pool": 10.0}))
+    (tmp_path / "s_ekip_vjeter.json").write_text(json.dumps({"cash": 500.0, "positions": {"X/USDT": {}}}))
+    real = analyst.CANDIDATES
+    analyst.CANDIDATES = [{"id": "m", "name": "M", "overrides": {"strategy": "momentum", "timeframe": "4h",
+                                                                   "allow_short": False, "momentum_days": 2.0}}]
+    try:
+        # Rekomandim i vjetër (pa "scope" ose për tregje të tjera) nuk hap asgjë, por ekipi pastrohet.
+        team = run_team_cycle(ex, cfg, {"approved": ["m"], "name": "M", "scope": "fokus:XAU/USDT"}, tournament=False)
+        assert team["members"] == [] and team["scope"] == "treg" and team["pool"] == cfg.paper_balance
+        assert not (tmp_path / "s_ekip_vjeter.json").exists()
+        team = run_team_cycle(ex, cfg, {"approved": ["m"], "name": "M", "scope": "treg"}, tournament=False)
+        assert [m["id"] for m in team["members"]] == ["m"]
+    finally:
+        analyst.CANDIDATES = real
