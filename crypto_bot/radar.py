@@ -49,7 +49,7 @@ def scan(exchange, cfg, n: int = 50) -> dict:
 def load(cfg):
     p = Path(cfg.radar_file)
     try:
-        return json.loads(p.read_text()) if p.exists() else None
+        return json.loads(p.read_text(encoding="utf-8")) if p.exists() else None
     except ValueError:
         return None
 
@@ -58,7 +58,7 @@ def update(exchange, cfg) -> tuple:
     """Rifreskon radarin dhe kthen (radari, monedhat që hynë rishtas ndër 5 më të fortat lart / poshtë)."""
     old = load(cfg) or {"up": [], "down": []}
     new = scan(exchange, cfg)
-    Path(cfg.radar_file).write_text(json.dumps(new, indent=2))
+    Path(cfg.radar_file).write_text(json.dumps(new, indent=2), encoding="utf-8")
     entered = {side: [r for r in new[side][:5] if r["symbol"] not in {o["symbol"] for o in old[side][:5]}]
                for side in ("up", "down")}
     return new, entered

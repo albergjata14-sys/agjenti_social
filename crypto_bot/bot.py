@@ -27,7 +27,7 @@ def is_running(cfg, state=None) -> bool:
     """A po punon një robot mbi këtë skedar gjendjeje? (sipas rrahjes së fundit të ruajtur)"""
     if state is None:
         p = Path(cfg.state_file)
-        state = json.loads(p.read_text()) if p.exists() else {}
+        state = json.loads(p.read_text(encoding="utf-8")) if p.exists() else {}
     return time.time() - state.get("heartbeat", 0) < cfg.poll_seconds * 2 + 30
 
 
@@ -319,7 +319,7 @@ def run_team_cycle(exchange, base_cfg, rec, tournament: bool = True) -> dict:
     approved, provisional = set(rec.get("approved", [])), set(rec.get("provisional", []))
     active = approved | provisional
     try:
-        prev = json.loads(Path(base_cfg.state_file).read_text())
+        prev = json.loads(Path(base_cfg.state_file).read_text(encoding="utf-8"))
     except (OSError, ValueError):
         prev = {}
     if prev.get("team") and prev.get("scope") != scope(base_cfg):
@@ -341,13 +341,13 @@ def run_team_cycle(exchange, base_cfg, rec, tournament: bool = True) -> dict:
     # Kapitali i strategjive që nuk janë më aktive dhe s'kanë pozicione kthehet te rezerva.
     for cid in list(sleeves - active):
         path = Path(team_config(base_cfg, cands[cid], approved).state_file)
-        st = json.loads(path.read_text())
+        st = json.loads(path.read_text(encoding="utf-8"))
         if not st.get("positions"):
             pool += st.get("cash", 0.0)
             team["trades"] += [{**t, "strategy": cands[cid]["name"]} for t in st.get("trades", [])]
             path.unlink()
             sleeves.discard(cid)
-    total = pool + sum(json.loads(Path(team_config(base_cfg, cands[c], approved).state_file).read_text())
+    total = pool + sum(json.loads(Path(team_config(base_cfg, cands[c], approved).state_file).read_text(encoding="utf-8"))
                        .get("last_equity", 0.0) for c in sleeves)
     for cid in [c for c in cands if c in active and c not in sleeves]:
         share = min(pool, total / max(1, base_cfg.max_active))
@@ -406,7 +406,7 @@ def run_team_cycle(exchange, base_cfg, rec, tournament: bool = True) -> dict:
                 _last_market[0] = time.time()
         except Exception as e:
             log(f"Kujtesa nuk u shkrua (roboti vazhdon): {e}")
-    Path(base_cfg.state_file).write_text(json.dumps(team, indent=2))
+    Path(base_cfg.state_file).write_text(json.dumps(team, indent=2), encoding="utf-8")
     return team
 
 
@@ -441,7 +441,7 @@ def ensure_research(cfg):
         log("Analisti i vjetër u ndal; po niset analisti për " + scope(cfg) + ".")
     ensure_research._last = time.time()
     conf = cfg.state_file.replace(".json", "_analist_config.json")
-    Path(conf).write_text(json.dumps(asdict(cfg), indent=2))
+    Path(conf).write_text(json.dumps(asdict(cfg), indent=2), encoding="utf-8")
     flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
     with open("crypto_bot_analist.log", "a", encoding="utf-8") as out:
         subprocess.Popen([sys.executable, "-m", "crypto_bot", "analist", "--vazhdimisht", "--config", conf,
@@ -509,6 +509,6 @@ def run_team_forever(exchange, base_cfg, tournament: bool = True):
         stop.unlink(missing_ok=True)
         p = Path(base_cfg.state_file)
         if p.exists():
-            st = json.loads(p.read_text())
+            st = json.loads(p.read_text(encoding="utf-8"))
             st["heartbeat"] = 0
-            p.write_text(json.dumps(st, indent=2))
+            p.write_text(json.dumps(st, indent=2), encoding="utf-8")

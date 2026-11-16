@@ -2,6 +2,7 @@
 rem Ekipi i robotit punon 24 ore, 7 dite. Nese ndalet nga nje gabim (p.sh. pa internet), riniset vete.
 rem Per ta ndalur: mbyll kete dritare, ose shtyp "Ndalo robotin" te paneli.
 cd /d "%~dp0"
+set PYTHONUTF8=1
 if not exist .venv\Scripts\python.exe (
   py -3.12 -m venv .venv || goto :error
   .venv\Scripts\python -m pip install -r requirements.txt || goto :error

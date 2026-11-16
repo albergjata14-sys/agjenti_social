@@ -263,7 +263,7 @@ def forward_results(base_cfg) -> dict:
         if not p.exists():
             continue
         try:
-            st = json.loads(p.read_text())
+            st = json.loads(p.read_text(encoding="utf-8"))
         except ValueError:
             continue
         equity = st.get("last_equity", st.get("cash", base_cfg.paper_balance))
@@ -322,7 +322,7 @@ def analyze_market(exchange, base_cfg, n_symbols: int = 20, test_days: int = Non
                 "test_days": test_days, "symbols": len(frames_by_tf.get("4h", {})), "results": rows, "forward": fwd,
                 "seconds": round(time.time() - t0), "lab_tested": len(lab_rows),
                 "lab_passed": sum(1 for r in lab_rows if r.get("eligible"))})
-    Path(base_cfg.recommendation_file).write_text(json.dumps(rec, indent=2, ensure_ascii=False))
+    Path(base_cfg.recommendation_file).write_text(json.dumps(rec, indent=2, ensure_ascii=False), encoding="utf-8")
     return rec
 
 
@@ -350,7 +350,7 @@ def tournament_config(base_cfg, cand):
 def load_recommendation(cfg):
     p = Path(cfg.recommendation_file)
     try:
-        return json.loads(p.read_text()) if p.exists() else None
+        return json.loads(p.read_text(encoding="utf-8")) if p.exists() else None
     except ValueError:
         return None
 

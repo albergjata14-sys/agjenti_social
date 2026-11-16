@@ -27,7 +27,7 @@ def _raw_settings():
         except Exception:
             pass
     if not (token and chat) and Path(TELEGRAM_FILE).exists():
-        saved = json.loads(Path(TELEGRAM_FILE).read_text())
+        saved = json.loads(Path(TELEGRAM_FILE).read_text(encoding="utf-8"))
         token, chat = token or saved.get("token"), chat or saved.get("chat_id")
     return (str(token).strip(), str(chat).strip()) if token and chat else None
 
@@ -129,7 +129,7 @@ def telegram_find_chat(token: str, username: str = None):
 
 
 def telegram_save(token: str, chat_id: str):
-    Path(TELEGRAM_FILE).write_text(json.dumps({"token": token, "chat_id": chat_id}))
+    Path(TELEGRAM_FILE).write_text(json.dumps({"token": token, "chat_id": chat_id}), encoding="utf-8")
 
 
 # --- regjistri i njoftimeve ------------------------------------------------------------------------
@@ -166,11 +166,11 @@ def load_alerts(cfg) -> list:
     if not cfg.alerts_file:
         return []
     p = Path(cfg.alerts_file)
-    return json.loads(p.read_text()) if p.is_file() else []
+    return json.loads(p.read_text(encoding="utf-8")) if p.is_file() else []
 
 
 def save_alerts(cfg, alerts: list):
-    Path(cfg.alerts_file).write_text(json.dumps(alerts, indent=2))
+    Path(cfg.alerts_file).write_text(json.dumps(alerts, indent=2), encoding="utf-8")
 
 
 def add_alert(cfg, symbol: str, direction: str, price: float) -> dict:

@@ -181,7 +181,7 @@ def display(symbol: str) -> str:
 def load_config(path=None, **overrides) -> Config:
     """Lexon config.json dhe zbaton ndryshimet e dhëna (p.sh. nga rreshti i komandës)."""
     path = Path(path) if path else DEFAULT_PATH
-    data = json.loads(path.read_text()) if path.exists() else {}
+    data = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
     known = {f.name for f in fields(Config)}
     unknown = set(data) - known
     if unknown:

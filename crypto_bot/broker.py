@@ -15,7 +15,7 @@ class Broker:
         self.live = exchange is not None
         self.path = Path(cfg.state_file)
         if self.path.exists():
-            self.state = json.loads(self.path.read_text())
+            self.state = json.loads(self.path.read_text(encoding="utf-8"))
             if self.state.get("team"):
                 raise RuntimeError(f"{self.path} është përmbledhja e ekipit; përdor një state_file tjetër ose nise me --ekip.")
             if self.state.get("live") != self.live:
@@ -30,7 +30,7 @@ class Broker:
 
     def save(self):
         tmp = self.path.with_suffix(".tmp")
-        tmp.write_text(json.dumps(self.state, indent=2))
+        tmp.write_text(json.dumps(self.state, indent=2), encoding="utf-8")
         os.replace(tmp, self.path)
 
     def cash(self) -> float:

@@ -150,7 +150,7 @@ def _closed(live: pd.DataFrame, cfg) -> pd.DataFrame:
 def _read_state(cfg):
     p = Path(cfg.state_file)
     try:
-        return json.loads(p.read_text()) if p.exists() else None
+        return json.loads(p.read_text(encoding="utf-8")) if p.exists() else None
     except (OSError, ValueError):
         return None     # roboti po e shkruan skedarin pikërisht tani; provohet në rifreskimin tjetër
 
@@ -579,14 +579,14 @@ def tab_robot(cfg, exchange):
     c1, c2 = st.columns(2)
     if c1.button("▶ Nis robotin", disabled=running, width="stretch", type="primary"):
         # Roboti niset me pikërisht rregullimet që shihen në panel.
-        Path(UI_CONFIG).write_text(json.dumps(asdict(replace(cfg, scan_market=whole)), indent=2))
+        Path(UI_CONFIG).write_text(json.dumps(asdict(replace(cfg, scan_market=whole)), indent=2), encoding="utf-8")
         flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
         with open("crypto_bot_output.log", "a", encoding="utf-8") as out:
             subprocess.Popen([sys.executable, "-m", "crypto_bot", "nis", "--config", UI_CONFIG] + (["--ekip"] if team_mode else []),
                              stdout=out, stderr=subprocess.STDOUT, creationflags=flags)
         st.toast("Roboti po niset; gjendja shfaqet pas ciklit të parë.")
     if c2.button("■ Ndalo robotin", disabled=not running, width="stretch"):
-        stop_file(cfg).write_text("stop")
+        stop_file(cfg).write_text("stop", encoding="utf-8")
         st.toast("U kërkua ndalimi; roboti ndalet brenda pak sekondash.")
     if state is None:
         return st.info("Roboti nuk është nisur ende. Tregton vetë me para demo (virtuale) mbi çmime reale.")
@@ -660,7 +660,7 @@ def _research_panel(cfg):
                        "`python -m crypto_bot analist --vazhdimisht`.")
             if st.button("Nis analistin e vazhdueshëm", key="start_research"):
                 conf = cfg.state_file.replace(".json", "_analist_config.json")
-                Path(conf).write_text(json.dumps(asdict(cfg), indent=2))
+                Path(conf).write_text(json.dumps(asdict(cfg), indent=2), encoding="utf-8")
                 with open("crypto_bot_analist.log", "a", encoding="utf-8") as out:
                     subprocess.Popen([sys.executable, "-m", "crypto_bot", "analist", "--vazhdimisht", "--config", conf],
                                      stdout=out, stderr=subprocess.STDOUT,

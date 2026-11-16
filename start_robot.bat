@@ -1,6 +1,7 @@
 @echo off
 rem Hap robotin e kriptove si aplikacion ne shfletues (dopio-klik).
 cd /d "%~dp0"
+set PYTHONUTF8=1
 if not exist .venv\Scripts\python.exe (
   echo Po pergatitet mjedisi per here te pare...
   py -3.12 -m venv .venv || goto :error

@@ -22,7 +22,7 @@ from .data import top_symbols
 def status(cfg):
     p = Path(cfg.research_file)
     try:
-        return json.loads(p.read_text()) if p.exists() else None
+        return json.loads(p.read_text(encoding="utf-8")) if p.exists() else None
     except ValueError:
         return None
 
@@ -35,7 +35,7 @@ def is_alive(cfg, st=None) -> bool:
 def _save(cfg, st):
     st["heartbeat"] = time.time()
     tmp = Path(cfg.research_file + ".tmp")
-    tmp.write_text(json.dumps(st, indent=2, ensure_ascii=False))
+    tmp.write_text(json.dumps(st, indent=2, ensure_ascii=False), encoding="utf-8")
     os.replace(tmp, cfg.research_file)
 
 
@@ -115,7 +115,7 @@ def research_once(exchange, cfg, st: dict, log=print, now=None) -> dict:
                     "scope": scope(cfg),
                     "symbols": len(frames["4h"]), "results": rows, "forward": forward_results(cfg),
                     "lab_tested": st.get("tested_total", 0), "lab_passed": st.get("passed_total", 0)})
-        Path(cfg.recommendation_file).write_text(json.dumps(rec, indent=2, ensure_ascii=False))
+        Path(cfg.recommendation_file).write_text(json.dumps(rec, indent=2, ensure_ascii=False), encoding="utf-8")
         names = {r["id"]: r["name"] for r in rows}
         if (set(rec["approved"]), set(rec["provisional"])) != (set(old.get("approved", [])), set(old.get("provisional", []))):
             lines = [f"✅ {names[i]}" for i in rec["approved"]] + [f"🟡 {names[i]} (provizore, gjysma e rrezikut)"
@@ -264,14 +264,22 @@ def research_forever(exchange, cfg, log=print, parent_state: str = None):
     _save(cfg, st)
     log("Analisti i vazhdueshëm u nis: radar çdo %g min, strategji të reja çdo %g min, rivlerësim çdo %g orë."
         % (cfg.radar_minutes, cfg.research_minutes, cfg.analyst_hours))
+    born = time.time()
     while True:
-        if parent_state:
+        # Në minutat e para ekipi mund të mos e ketë shkruar ende gjendjen e re (skedari i vjetër ka një rrahje të
+        # vjetër): analisti nuk ndalet para se t'i japë kohë.
+        if parent_state and time.time() - born > 600:
             try:
-                hb = json.loads(Path(parent_state).read_text()).get("heartbeat", 0)
+                hb = json.loads(Path(parent_state).read_text(encoding="utf-8")).get("heartbeat", 0)
             except Exception:
                 hb = time.time()
             if time.time() - hb > 1800:
                 log("Ekipi nuk punon më; analisti ndalet.")
+                st["heartbeat"] = 0          # që ekipi ta rinisë menjëherë kur të kthehet, pa pritur 25 minuta
+                try:
+                    Path(cfg.research_file).write_text(json.dumps(st, indent=2, ensure_ascii=False), encoding="utf-8")
+                except OSError:
+                    pass
                 break
         if (status(cfg) or {}).get("pid", os.getpid()) != os.getpid():
             log("Një analist tjetër ka marrë punën; ky ndalet.")

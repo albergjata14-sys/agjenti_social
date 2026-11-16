@@ -1,5 +1,6 @@
 """Rreshti i komandës:  python -m crypto_bot {analizo|skano|backtest|nis}"""
 import argparse
+import sys
 import time
 
 from . import journal, notify
@@ -53,6 +54,11 @@ def run_alerts(exchange, cfg):
 
 
 def main(argv=None):
+    for stream in (sys.stdout, sys.stderr):       # Windows: emoji dhe shkronjat shqipe në dritare dhe në log
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
     p = argparse.ArgumentParser(prog="crypto_bot", description="Robot analize dhe tregtimi për kriptomonedha")
     p.add_argument("komanda", choices=["analizo", "skano", "backtest", "portofol", "nis", "ditar", "njoftime", "analist", "laboratori", "raport"])
     p.add_argument("--ekip", action="store_true",
