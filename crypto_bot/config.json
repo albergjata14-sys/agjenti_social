@@ -54,6 +54,8 @@
   "mtf_trigger": "pullback",
   "mtf_trigger_ema": 20,
   "mtf_exit": "4h",
+  "breakeven_r": 0.0,
+  "trail_r": 0.0,
   "history_years": 3.0,
   "use_mt5_data": true,
   "max_active": 4,

@@ -194,6 +194,20 @@ Rezultati i parë me të dhëna reale (BTCUSDT, nëntor 2026, rrezik 0.5% për t
 | Shumë-intervale 15m (tërheqje) | 1 vit | +48.0% | 15.2% | – |
 | Momentum 14 ditë 4h | 3 vjet | +26.3% | 8.0% | +16.7 · +3.4 · +4.7 |
 
+**Pse nuk ka objektiv fiks (TP)?** U provua në të njëjtat të dhëna (strategjia 30m, 3 vjet):
+
+| Mënyra e daljes | Fitimi | Tregti fituese |
+|---|---|---|
+| Pa objektiv, dalje kur kthehet trendi 4-orësh (parazgjedhja) | +63.6% | 20% |
+| Objektiv 2R | −5.9% | 34% |
+| Objektiv 3R | +4.5% | 26% |
+| Objektiv 5R | +14.9% | 20% |
+| Stop ndjekës 3R pas majës (`trail_r`) | +32.0% | 24% |
+| Stop te hyrja pas +2R (`breakeven_r`) | +66.1% | 16% |
+
+Fitimi vjen nga pak tregti që vrapojnë shumë (5–15R); një objektiv fiks i pret pikërisht ato. Laboratori provon
+vetë edhe `breakeven_r` (stop-i kalon te çmimi i hyrjes pasi fitimi arrin kaq herë rrezikun) dhe `trail_r`.
+
 Kujdes: këto strategji fitojnë pak herë dhe shumë (rreth 15–20% e tregtive mbyllen me fitim; humbjet janë të
 vogla dhe të shpeshta), ndaj ka periudha të gjata pa fitim. Variantet 15-minutëshe u zgjodhën pasi u panë
 rezultatet e të njëjtit vit, prandaj janë më pak të besueshme se ato 30m dhe 1h; shumica e varianteve të

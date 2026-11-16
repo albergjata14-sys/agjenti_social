@@ -1504,3 +1504,26 @@ def test_team_restarts_when_markets_change(tmp_path):
         assert [m["id"] for m in team["members"]] == ["m"]
     finally:
         analyst.CANDIDATES = real
+
+
+def test_breakeven_and_r_trailing_stop(tmp_path):
+    from crypto_bot.strategy import manage_stop
+
+    cfg = Config(breakeven_r=1.0, trail_r=3.0)
+    p = {"entry": 100.0, "sl": 98.0, "side": 1, "best": 100.0, "r0": 2.0}
+    manage_stop(cfg, p, 101.5, 100.5)
+    assert p["sl"] == 98.0                                   # ende nën 1R: stop-i nuk lëviz
+    manage_stop(cfg, p, 102.5, 101.0)
+    assert p["sl"] == 100.0                                  # +1R: stop-i kalon te hyrja
+    manage_stop(cfg, p, 110.0, 108.0)
+    assert p["sl"] == 104.0                                  # ndjekës 3R (6 pikë) pas majës 110
+    manage_stop(cfg, p, 105.0, 104.5)
+    assert p["sl"] == 104.0                                  # stop-i nuk kthehet mbrapsht
+    s = {"entry": 100.0, "sl": 102.0, "side": -1, "best": 100.0, "r0": 2.0}
+    manage_stop(cfg, s, 99.5, 97.0)
+    assert s["sl"] == 100.0                                  # short: +1.5R → stop te hyrja
+    # Roboti i drejtpërdrejtë (demo): i njëjti rregull në çdo kontroll të çmimit.
+    b = Broker(Config(state_file=str(tmp_path / "s.json"), breakeven_r=1.0, risk_per_trade_pct=1.0, position_size_pct=100))
+    b.buy("BTC/USDT", 100.0, 1000.0, stop_pct=2.0)
+    assert b.check_exit("BTC/USDT", 102.5) is None and b.positions["BTC/USDT"]["sl"] == pytest.approx(100.0)
+    assert b.check_exit("BTC/USDT", 99.9) == "stop-loss"

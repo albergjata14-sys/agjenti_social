@@ -1,7 +1,7 @@
 """Testimi i strategjisë mbi të dhëna historike me fitim/humbje në përqindje."""
 import numpy as np
 
-from .strategy import (exit_prices, position_risk, position_value, signal_frame, size_position, stop_distance_pct,
+from .strategy import (exit_prices, manage_stop, position_risk, position_value, signal_frame, size_position, stop_distance_pct,
                        warmup)
 
 
@@ -188,7 +188,7 @@ def portfolio_backtest(frames: dict, cfg, market=None) -> dict:
             cost, qty, margin = sized
             sl, tp = exit_prices(cfg, o[i, j], stop_pct, side)
             pos[j] = {"i": i, "side": side, "entry": o[i, j], "qty": qty, "cost": cost, "margin": margin,
-                      "sl": sl, "tp": tp, "best": o[i, j]}
+                      "sl": sl, "tp": tp, "best": o[i, j], "r0": abs(o[i, j] - sl)}
             cash -= cost
         for j in list(pos):     # stop-i kontrollohet i pari: rasti më i keq kur preken të dy brenda një qiriri
             p, long = pos[j], pos[j]["side"] > 0
@@ -196,14 +196,8 @@ def portfolio_backtest(frames: dict, cfg, market=None) -> dict:
                 close(j, i, min(o[i, j], p["sl"]) if long else max(o[i, j], p["sl"]), "stop-loss")
             elif p["tp"] and ((h[i, j] >= p["tp"]) if long else (l[i, j] <= p["tp"])):
                 close(j, i, max(o[i, j], p["tp"]) if long else min(o[i, j], p["tp"]), "take-profit")
-            elif cfg.trailing_stop_pct:      # stop-i ndjek çmimin më të mirë (pas qiririt, pa parë të ardhmen)
-                t = cfg.trailing_stop_pct / 100
-                if long:
-                    p["best"] = max(p["best"], h[i, j])
-                    p["sl"] = max(p["sl"], p["best"] * (1 - t))
-                else:
-                    p["best"] = min(p["best"], l[i, j])
-                    p["sl"] = min(p["sl"], p["best"] * (1 + t))
+            elif cfg.trailing_stop_pct or cfg.breakeven_r or cfg.trail_r:
+                manage_stop(cfg, p, h[i, j], l[i, j])     # stop-i ndjek çmimin (pas qiririt, pa parë të ardhmen)
         equity.append(cash + sum(value(p, last[i, j] if np.isfinite(last[i, j]) else p["entry"]) for j, p in pos.items()))
 
     eq = pd.Series(equity, index=idx[start:])

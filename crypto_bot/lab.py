@@ -34,7 +34,9 @@ FOCUS_SPACE = {
     # Trendi nga 1 dita te 30 minutat, hyrja në intervalin e vogël (15 minutat peshojnë më shumë në kërkim).
     "mtf": {"timeframe": ["15m", "15m", "30m", "1h"], "mtf_ema": [10, 20, 30, 50, 80], "mtf_min_align": [2, 3, 4],
             "mtf_trigger": ["pullback", "breakout"], "mtf_trigger_ema": [10, 20, 40], "mtf_exit": ["30m", "4h", "8h", "1d", ""],
-            "stop_loss_atr": [1.5, 2.0, 2.5, 3.0, 4.0], "take_profit_r": [0.0, 2.0, 3.0, 5.0], "allow_short": [True, False]},
+            "stop_loss_atr": [1.5, 2.0, 2.5, 3.0, 4.0], "take_profit_r": [0.0, 0.0, 3.0, 5.0], "allow_short": [True, False],
+            # Mbrojtja e fitimit: stop-i kalon te hyrja pas kaq R, ose ndjek çmimin kaq R pas majës (0 = jo).
+            "breakeven_r": [0.0, 1.0, 1.5, 2.0], "trail_r": [0.0, 0.0, 4.0, 6.0]},
     "momentum": {"timeframe": ["15m", "30m", "1h", "4h", "8h", "1d"], "momentum_days": [1.0, 2.0, 3.0, 5.0, 7.0, 10.0, 14.0, 21.0, 30.0],
                  "momentum_min_pct": [0.0, 0.5, 1.0, 2.0, 5.0], "momentum_ema": [50, 100, 200],
                  "stop_loss_atr": [1.0, 1.5, 2.0, 3.0], "take_profit_r": [0.0, 1.5, 2.0, 3.0],
@@ -80,6 +82,8 @@ def describe(o: dict) -> str:
         core = (f"thyerje {o['breakout_entry']}/{o['breakout_exit']}, EMA{o['trend_ema']}, "
                 f"ditor {'pa' if not o['daily_trend_ema'] else 'EMA' + str(o['daily_trend_ema'])}")
     stop = f"stop {o['stop_loss_atr']:g}×ATR" if o.get("stop_loss_atr") else f"stop {o['stop_loss_pct']:g}%"
+    stop += f", te hyrja pas {o['breakeven_r']:g}R" if o.get("breakeven_r") else ""
+    stop += f", ndjekës {o['trail_r']:g}R" if o.get("trail_r") else ""
     return f"Evo: {core}, {stop}{tp}, {o['timeframe']}, {side}"
 
 

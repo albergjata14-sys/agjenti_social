@@ -63,6 +63,8 @@ class Config:
     mtf_trigger: str = "pullback"      # hyrja në intervalin e vogël: "pullback" (tërheqje) ose "breakout" (thyerje)
     mtf_trigger_ema: int = 20          # mesatarja e shpejtë / numri i qirinjve të thyerjes
     mtf_exit: str = "4h"               # dalje kur kthehet trendi i këtij intervali ("" = vetëm stop/objektiv)
+    breakeven_r: float = 0.0           # kur fitimi arrin kaq herë rrezikun (R), stop-i kalon te çmimi i hyrjes (0 = jo)
+    trail_r: float = 0.0               # stop ndjekës: kaq herë rreziku fillestar pas çmimit më të mirë (0 = jo)
     history_years: float = 3.0         # sa vite histori provon analisti (4h, 1h, 1 ditë; 15 min deri në 1 vit)
     use_mt5_data: bool = True          # merr historinë e XAUUSD/EURUSD/GBPUSD/BTCUSD nga MT5 kur është i hapur
     max_active: int = 4                # sa strategji luan ekipi njëkohësisht (të miratuara + provizore)
@@ -138,6 +140,8 @@ class Config:
             raise ValueError("risk_per_trade_pct duhet të jetë 0–100 dhe max_spread_pct >= 0")
         if self.risk_per_trade_pct > self.max_total_risk_pct:
             raise ValueError("rreziku për tregti nuk mund të jetë më i madh se rreziku i përbashkët max_total_risk_pct")
+        if self.breakeven_r < 0 or self.trail_r < 0:
+            raise ValueError("breakeven_r dhe trail_r duhet të jenë >= 0")
         if self.leverage < 1 or self.take_profit_r < 0 or self.test_days < 10:
             raise ValueError("leverage >= 1, take_profit_r >= 0 dhe test_days >= 10")
         if not 0 <= self.max_daily_loss_pct < 100:

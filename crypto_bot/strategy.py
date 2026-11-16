@@ -162,6 +162,23 @@ def warmup(cfg) -> int:
     return base
 
 
+def manage_stop(cfg, p: dict, high: float, low: float) -> None:
+    """Përditëson stop-in e një pozicioni pas një qiriri (ose çmimi): stop ndjekës në %, kalim te hyrja pas
+    `breakeven_r` × rrezikun, dhe stop ndjekës `trail_r` × rreziku fillestar. Stop-i vetëm afrohet, kurrë s'largohet."""
+    side = p.get("side", 1)
+    p["best"] = max(p.get("best", p["entry"]), high) if side > 0 else min(p.get("best", p["entry"]), low)
+    better = max if side > 0 else min
+    if cfg.trailing_stop_pct:
+        p["sl"] = better(p["sl"], p["best"] * (1 - side * cfg.trailing_stop_pct / 100))
+    r0 = p.get("r0") or abs(p["entry"] - p["sl"])
+    if not r0:
+        return
+    if cfg.breakeven_r and (p["best"] - p["entry"]) * side >= cfg.breakeven_r * r0:
+        p["sl"] = better(p["sl"], p["entry"])
+    if cfg.trail_r:
+        p["sl"] = better(p["sl"], p["best"] - side * cfg.trail_r * r0)
+
+
 def live_candles(cfg) -> int:
     """Sa qirinj merren në punën e drejtpërdrejtë: strategjia mtf ka nevojë për histori më të gjatë (EMA ditore)."""
     return max(cfg.candles, warmup(cfg) + 100) if cfg.strategy == "mtf" else cfg.candles

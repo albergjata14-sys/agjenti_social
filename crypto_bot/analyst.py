@@ -110,7 +110,7 @@ def base_candidates(cfg) -> list:
 STRATEGY_FIELDS = {"strategy", "timeframe", "allow_short", "momentum_days", "take_profit_pct", "stop_loss_pct",
                    "momentum_min_pct", "momentum_ema", "breakout_entry", "breakout_exit", "trend_ema", "daily_trend_ema",
                    "trailing_stop_pct", "momentum_daily_filter", "scan_top_n", "stop_loss_atr", "take_profit_r",
-                   "mtf_ema", "mtf_min_align", "mtf_trigger", "mtf_trigger_ema", "mtf_exit"}
+                   "mtf_ema", "mtf_min_align", "mtf_trigger", "mtf_trigger_ema", "mtf_exit", "breakeven_r", "trail_r"}
 
 
 def _evolved(cfg, statuses):

@@ -143,9 +143,17 @@ class Broker:
             return "stop-loss"
         if pos["tp"] and ((price >= pos["tp"]) if long else (price <= pos["tp"])):
             return "take-profit"
-        t = self.cfg.trailing_stop_pct / 100
-        if t and ((price > pos["high"]) if long else (price < pos["high"])):
-            pos["high"] = price   # çmimi më i mirë i arritur (maja për long, fundi për short)
-            pos["sl"] = max(pos["sl"], price * (1 - t)) if long else min(pos["sl"], price * (1 + t))
-            self.save()
+        cfg = self.cfg
+        if cfg.trailing_stop_pct or cfg.breakeven_r or cfg.trail_r:
+            # Stop-i afrohet kur çmimi ecën në favor: ndjekës në %, kalim te hyrja pas `breakeven_r` × rrezikun,
+            # ose ndjekës `trail_r` × rrezikun fillestar. `high` = çmimi më i mirë i arritur.
+            from .strategy import manage_stop
+
+            before = (pos.get("high"), pos["sl"])
+            pos.setdefault("r0", abs(pos["entry"] - pos["sl"]))
+            pos["best"] = pos.get("high", pos["entry"])
+            manage_stop(cfg, pos, price, price)
+            pos["high"] = pos.pop("best")
+            if (pos["high"], pos["sl"]) != before:
+                self.save()
         return None
