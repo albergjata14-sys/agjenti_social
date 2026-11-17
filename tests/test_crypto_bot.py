@@ -1527,3 +1527,27 @@ def test_breakeven_and_r_trailing_stop(tmp_path):
     b.buy("BTC/USDT", 100.0, 1000.0, stop_pct=2.0)
     assert b.check_exit("BTC/USDT", 102.5) is None and b.positions["BTC/USDT"]["sl"] == pytest.approx(100.0)
     assert b.check_exit("BTC/USDT", 99.9) == "stop-loss"
+
+
+def test_telegram_token_cleaning(monkeypatch):
+    from crypto_bot import notify
+
+    tok = "1234567890:AAH" + "x" * 32
+    assert notify.clean_token(f'  "{tok}" \n') == tok
+    assert notify.clean_token(f"bot{tok}") == tok
+    assert notify.clean_token(f"https://api.telegram.org/bot{tok}/getMe") == tok
+    assert notify.clean_token("") == ""
+    assert "bosh" in notify.token_problem("")
+    assert "formën" in notify.token_problem("abc")
+
+    class R:
+        def __init__(self, ok):
+            self.ok = ok
+
+        def json(self):
+            return {"ok": self.ok}
+
+    monkeypatch.setattr(notify.requests, "get", lambda *a, **k: R(False))
+    assert "nuk e njeh" in notify.token_problem(tok)
+    monkeypatch.setattr(notify.requests, "get", lambda *a, **k: R(True))
+    assert notify.token_problem(tok) == ""

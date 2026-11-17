@@ -22,9 +22,20 @@ def telegram_setup(action: str):
     import getpass
 
     print("1) Në Telegram hap @BotFather, shkruaj /newbot dhe ndiq hapat. Do të marrësh një token.")
-    token = getpass.getpass("2) Ngjite tokenin këtu (nuk shfaqet në ekran) dhe shtyp Enter: ").strip()
+    print("   Ngjitja: klik me të djathtën në dritare, ose Ctrl+Shift+V (Ctrl+V vetëm nuk punon këtu).")
+    token = notify.clean_token(getpass.getpass("2) Ngjite tokenin këtu (nuk shfaqet në ekran) dhe shtyp Enter: "))
+    if not token:     # disa dritare (p.sh. në VS Code) nuk e pranojnë ngjitjen në fushën e fshehur
+        print("   Nuk mori asgjë. Provo përsëri; këtë herë tokeni do të shfaqet në ekran (vetëm në kompjuterin tënd).")
+        token = notify.clean_token(input("   Tokeni: "))
+    problem = notify.token_problem(token)
+    if problem:
+        return print("Gabim: " + problem)
+    print(f"   Tokeni u pranua ({token.split(':')[0]}:…{token[-4:]}).")
     input("3) Hap robotin tënd të ri në Telegram, shtyp Start ose shkruaji një mesazh, pastaj shtyp Enter këtu...")
-    chat = notify.telegram_find_chat(token)
+    try:
+        chat = notify.telegram_find_chat(token)
+    except Exception as e:
+        return print(f"Gabim nga Telegram-i: {e}")
     if not chat:
         return print("Nuk u gjet asnjë mesazh. Shkruaji robotit në Telegram dhe provo prapë.")
     notify.telegram_save(token, chat)

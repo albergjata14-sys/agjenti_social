@@ -128,6 +128,33 @@ def telegram_find_chat(token: str, username: str = None):
     return None
 
 
+def clean_token(raw: str) -> str:
+    """Pastron tokenin e ngjitur: hapësira, thonjëza, "bot" para tij ose i gjithë linku i API-së."""
+    t = (raw or "").strip().strip("'\"").strip()
+    if "/bot" in t:
+        t = t.split("/bot", 1)[1].split("/", 1)[0]
+    if t.lower().startswith("bot") and ":" in t[3:]:
+        t = t[3:]
+    return "".join(t.split())
+
+
+def token_problem(token: str) -> str:
+    """Pse tokeni nuk vlen (në shqip), ose "" kur është në rregull. Pyet Telegram-in me getMe."""
+    if not token:
+        return "Tokeni doli bosh: nuk u ngjit asgjë."
+    head, _, tail = token.partition(":")
+    if not head.isdigit() or len(tail) < 30:
+        return ("Tokeni nuk ka formën e duhur (p.sh. 1234567890:AAH...). Kopjo të gjithë rreshtin nga @BotFather, "
+                "pa hapësira.")
+    try:
+        data = requests.get(API.format(token=token, method="getMe"), timeout=10).json()
+    except Exception as e:
+        return f"Telegram-i nuk u arrit ({e}). Kontrollo internetin."
+    if not data.get("ok"):
+        return "Telegram-i nuk e njeh këtë token. Kopjoje përsëri nga @BotFather (/mybots → roboti → API Token)."
+    return ""
+
+
 def telegram_save(token: str, chat_id: str):
     Path(TELEGRAM_FILE).write_text(json.dumps({"token": token, "chat_id": chat_id}), encoding="utf-8")
 
