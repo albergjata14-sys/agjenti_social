@@ -64,7 +64,25 @@ def run_alerts(exchange, cfg):
         time.sleep(cfg.poll_seconds)
 
 
+def disable_quick_edit():
+    """Windows: një klik në dritaren e robotit e kalon atë në "Select" dhe e ngrin programin derisa të shtypet
+    Esc. Kjo e çaktivizon atë mënyrë vetëm për dritaren e robotit (zgjedhja me të djathtën mbetet)."""
+    if sys.platform != "win32":
+        return
+    try:
+        import ctypes
+
+        k = ctypes.windll.kernel32
+        handle = k.GetStdHandle(-10)                      # hyrja e dritares
+        mode = ctypes.c_uint32()
+        if k.GetConsoleMode(handle, ctypes.byref(mode)):
+            k.SetConsoleMode(handle, (mode.value & ~0x0040) | 0x0080)   # pa QUICK_EDIT, me EXTENDED_FLAGS
+    except Exception:
+        pass
+
+
 def main(argv=None):
+    disable_quick_edit()
     for stream in (sys.stdout, sys.stderr):       # Windows: emoji dhe shkronjat shqipe në dritare dhe në log
         try:
             stream.reconfigure(encoding="utf-8", errors="replace")
