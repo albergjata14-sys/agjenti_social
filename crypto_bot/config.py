@@ -171,7 +171,10 @@ FOCUS = {"focus": True, "exchange": "mexc_futures", "symbols": FOCUS_SYMBOLS, "s
          "max_total_risk_pct": 2.0, "position_size_pct": 100.0, "max_open_positions": 1, "stop_loss_atr": 2.5,
          "research_symbols": 1, "strategy": "mtf", "allow_short": True, "timeframe": "15m", "candles": 6000,
          "mtf_ema": 50, "mtf_min_align": 4, "mtf_trigger": "pullback", "mtf_exit": "4h",
-         "momentum_min_pct": 1.0, "test_days": 90, "trend_minutes": 15.0}
+         "momentum_min_pct": 1.0, "test_days": 90, "trend_minutes": 15.0,
+         # Pasi fitimi arrin 2 herë rrezikun, stop-i kalon te hyrja: tregtia nuk mbyllet më me humbje.
+         # Në 3 vjet BTC e përmirësoi ose e la njësoj rezultatin e strategjive të miratuara.
+         "breakeven_r": 2.0}
 
 
 def display(symbol: str) -> str:
