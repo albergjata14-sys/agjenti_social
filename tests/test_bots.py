@@ -19,7 +19,9 @@ def test_get_bot_by_name():
         get_bot("nuk ekziston")
 
 
-def test_ready_only_with_prompt():
-    ready = {cls.name for cls in ALL_BOTS if cls().ready}
-    assert ready == {"Chart Feeder", "Math Geometry", "Backtester", "Signal Cleaner", "Sniper"}
+def test_all_bots_have_prompts():
+    for cls in ALL_BOTS:
+        bot = cls()
+        assert bot.ready
+        assert bot.prompt.startswith("You are")
     assert get_bot("chart feeder").prompt.startswith("You are Chart Feeder.")
