@@ -24,6 +24,23 @@ def _load_crypto_panel():
     return render
 
 
+def _load_bots_panel():
+    """Kthen panelin e botëve, duke ringarkuar kodin e tyre kur skedarët kanë ndryshuar (si te roboti i kriptove)."""
+    import pathlib
+    import sys
+
+    folder = pathlib.Path(__file__).parent / "bots"
+    stamp = max(f.stat().st_mtime for f in folder.rglob("*") if f.is_file() and "__pycache__" not in f.parts)
+    loaded = [name for name in sys.modules if name == "bots" or name.startswith("bots.")]
+    if loaded and getattr(sys, "_bots_stamp", None) != stamp:
+        for name in loaded:
+            del sys.modules[name]
+    sys._bots_stamp = stamp
+    from bots.ui import render
+
+    return render
+
+
 # Konfigurimi i faqes
 st.set_page_config(page_title="Smart Albania - Multi-Agent System", page_icon="🤖", layout="centered")
 
@@ -87,9 +104,7 @@ elif selected_agent == "Crypto Trading Agent":
 
 # 3. EKIPI I 6 BOTËVE (CHART FEEDER → ... → ALERT MANAGER), MË VETE NGA ROBOTI I KRIPTOVE
 elif selected_agent == "Ekipi i Botëve (6 botë)":
-    from bots.ui import render as render_bots
-
-    render_bots()
+    _load_bots_panel()()
 
 # 4. LOGJIKA E AGJENTEVE TË TJERË (QË NUK HUMBASIN MË)
 else:

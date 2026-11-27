@@ -20,22 +20,31 @@ from bots.chart_feeder.logic import INTERVAL, MS, top_pairs
 
 
 _DIR = Path(__file__).parent
-# three.js (MIT) ruhet brenda projektit, që pamja 3D të punojë edhe pa CDN.
-SCENE = (_DIR / "scene.html").read_text(encoding="utf-8").replace(
-    "__THREE__", (_DIR / "three" / "three.min.js").read_text(encoding="utf-8"))
+_ASSETS = {}
+
+
+def _asset(name):
+    """Lexon skedarin HTML sa herë ndryshon në disk (pas një përditësimi nuk mbetet versioni i vjetër në memorie)."""
+    path = _DIR / name
+    stamp = path.stat().st_mtime
+    if _ASSETS.get(name, (None,))[0] != stamp:
+        text = path.read_text(encoding="utf-8")
+        if name == "scene.html":   # three.js (MIT) ruhet brenda projektit, që pamja 3D të punojë edhe pa CDN
+            text = text.replace("__THREE__", (_DIR / "three" / "three.min.js").read_text(encoding="utf-8"))
+        _ASSETS[name] = (stamp, text)
+    return _ASSETS[name][1]
 ICON = {"passed": "✅", "rejected": "⛔", "alert": "🚨", "error": "⚠️", "running": "⏳", "idle": "⚪"}
 
 
 def scene(statuses, height=500):
     state = [{"name": n, "status": s} for n, s in zip(NAMES, statuses)]
-    page = SCENE.replace("__STATE__", json.dumps(state))      # vetëm emrat dhe gjendjet tona, asgjë nga jashtë
+    page = _asset("scene.html").replace("__STATE__", json.dumps(state))      # vetëm emrat dhe gjendjet tona, asgjë nga jashtë
     if hasattr(st, "iframe"):
         st.iframe(page, height=height)
     else:
         components.html(page, height=height)
 
 
-DASH = (_DIR / "dashboard.html").read_text(encoding="utf-8")
 AGENT_STYLE = {   # ikona dhe ngjyra e çdo agjenti në panel
     "Chart Feeder": ("C", "#4dc3ff"), "Math Geometry": ("∠", "#b57bff"), "Backtester": ("B", "#ffcf5a"),
     "Signal Cleaner": ("F", "#2ee6a0"), "Sniper": ("◎", "#ff7ab6"), "Alert Manager": ("!", "#ff4d6a"),
@@ -88,7 +97,7 @@ def dashboard_data(results, state, tf, brain):
 
 
 def dashboard(results, state, tf, brain):
-    page = DASH.replace("__DATA__", json.dumps(dashboard_data(results, state, tf, brain)).replace("</", "<\\/"))
+    page = _asset("dashboard.html").replace("__DATA__", json.dumps(dashboard_data(results, state, tf, brain)).replace("</", "<\\/"))
     if hasattr(st, "iframe"):
         st.iframe(page, height="content")         # lartësia ndjek përmbajtjen (kompjuter ose telefon)
     else:
