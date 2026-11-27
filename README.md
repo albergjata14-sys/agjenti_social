@@ -5,7 +5,8 @@ Aplikacion Streamlit (`streamlit run app.py`) me agjentët e Smart Albania dhe *
 ## 🤖 Ekipi i 6 botëve (`bots/`, `bots_app.py`)
 
 Më vete nga roboti i kriptove, falas dhe pa asnjë API të AI-së. Në Windows: dopio-klik te `start_bots.bat` →
-`http://localhost:8520` (ose `streamlit run bots_app.py`). Shtyp "Skano tani" ose ndiz skanimin automatik:
+`http://localhost:8520` (ose `streamlit run bots_app.py`). I njëjti panel gjendet edhe te `app.py`, si zgjedhja
+"Ekipi i Botëve (6 botë)". Shtyp "Skano tani" ose ndiz skanimin automatik:
 Chart Feeder merr vetë grafikët nga MEXC (spot) dhe secila monedhë kalon me radhë
 Chart Feeder → Math Geometry → Backtester → Signal Cleaner → Sniper → Alert Manager.
 Çdo bot zbaton me kod rregullat e promptit të vet (`bots/<emri>/prompt.md` → `bots/<emri>/logic.py`);
