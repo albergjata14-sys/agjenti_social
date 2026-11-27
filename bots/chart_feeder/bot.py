@@ -1,4 +1,4 @@
-"""Chart Feeder – Mbledh dhe ushqen të dhënat e grafikut (qirinjtë, volumi) për botët e tjerë."""
+"""Chart Feeder – Merr grafikun dhe e etiketon (Pair, Timeframe) pa analizuar; ia kalon Math Geometry."""
 from pathlib import Path
 
 from bots._base import Bot
@@ -6,7 +6,7 @@ from bots._base import Bot
 
 class ChartFeeder(Bot):
     name = "Chart Feeder"
-    role = "Mbledh dhe ushqen të dhënat e grafikut (qirinjtë, volumi) për botët e tjerë."
+    role = "Merr grafikun dhe e etiketon (Pair, Timeframe) pa analizuar; ia kalon Math Geometry."
 
     def __init__(self):
         super().__init__(Path(__file__).parent)
