@@ -1,0 +1,195 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  :root { --bg:#04080a; --panel:#08110f; --line:#12302a; --green:#2ee6a0; --red:#ff4d6a; --text:#d8f3ea; --dim:#5f8a7d;
+          --gold:#ffcf5a; --blue:#4dc3ff; --mono: ui-monospace, "SF Mono", Consolas, monospace; }
+  * { box-sizing: border-box; }
+  html, body { margin:0; background:var(--bg); color:var(--text); font-family: "Segoe UI", system-ui, sans-serif; }
+  .wrap { padding: 10px; display: grid; gap: 10px; }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 12px; position: relative; overflow: hidden; }
+  .head { display:flex; justify-content:space-between; align-items:flex-start; gap:10px; }
+  .title { display:flex; gap:12px; align-items:center; }
+  .logo { width:46px; height:46px; border-radius:12px; background:#e9eef0; display:grid; place-items:center; flex:none; }
+  .logo i { display:block; width:30px; height:30px; border-radius:50%; background:radial-gradient(circle at 35% 30%,#fff,#9aa3a8); position:relative; }
+  .logo i::before, .logo i::after { content:""; position:absolute; top:9px; width:4px; height:10px; border-radius:3px; background:#111; transform:rotate(-18deg); }
+  .logo i::before { left:9px; } .logo i::after { left:16px; }
+  h1 { margin:0; font-size:22px; letter-spacing:.2px; } h1 b { color:var(--green); }
+  .sub { font-family:var(--mono); font-size:11px; color:var(--dim); margin-top:3px; }
+  .bal { text-align:right; } .bal small { font-size:10px; color:var(--dim); letter-spacing:1px; }
+  .bal div { font-size:30px; font-weight:800; color:var(--green); line-height:1.1; } .bal div.neg { color:var(--red); }
+  .bal span { font-family:var(--mono); font-size:11px; color:var(--text); }
+  .chips { display:flex; gap:6px; overflow-x:auto; padding-bottom:2px; }
+  .chip { flex:none; font-family:var(--mono); font-size:11px; border:1px solid var(--line); border-radius:8px; padding:5px 8px; display:flex; gap:6px; align-items:center; }
+  .chip.on { border-color: var(--green); box-shadow: 0 0 10px #2ee6a033 inset; }
+  .chip .d { width:15px; height:15px; border-radius:50%; display:grid; place-items:center; font-size:9px; color:#000; font-weight:700; }
+  .up { color:var(--green); } .down { color:var(--red); }
+  .bars { display:flex; gap:2px; height:14px; } .bars i { flex:1; border-radius:2px; background:#14251f; } .bars i.w { background:var(--green); } .bars i.l { background:var(--red); }
+  .label { font-family:var(--mono); font-size:11px; color:var(--dim); letter-spacing:.5px; display:flex; justify-content:space-between; gap:8px; flex-wrap:wrap; }
+  canvas { display:block; width:100%; }
+  .closed { position:absolute; top:34px; left:50%; transform:translateX(-50%); background:#06100dcc; border:1px solid #2ee6a066; border-radius:10px; padding:6px 12px; font-family:var(--mono); white-space:nowrap; }
+  .closed .t { font-size:10px; color:var(--dim); } .closed .t b { background:#1b2b26; color:var(--text); padding:1px 5px; border-radius:4px; margin-right:6px; }
+  .closed .v { font-size:20px; font-weight:800; } .closed.neg { border-color:#ff4d6a66; }
+  #hub { position:relative; height:440px; }
+  #hub canvas { position:absolute; inset:0; height:100%; }
+  .node { position:absolute; transform:translate(-50%,-50%); background:#0a1613; border:1px solid var(--line); border-radius:10px; padding:5px 8px 5px 6px;
+          display:flex; gap:7px; align-items:center; min-width:118px; max-width:150px; transition: all .3s; }
+  .node .ic { width:22px; height:22px; border-radius:6px; display:grid; place-items:center; font-weight:800; font-size:12px; color:#04080a; flex:none; }
+  .node b { display:block; font-family:var(--mono); font-size:11px; letter-spacing:.4px; }
+  .node span { display:block; font-family:var(--mono); font-size:9.5px; color:var(--dim); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:110px; }
+  .node.on { border-color: currentColor; box-shadow: 0 0 14px -2px currentColor; }
+  .node.stop { border-color: var(--red); box-shadow: 0 0 14px -4px var(--red); }
+  .brain { position:absolute; left:50%; top:50%; transform:translate(-50%,-50%); width:110px; height:110px; border-radius:50%;
+           background: radial-gradient(circle at 40% 35%, #ffffff, #c9d1d4 60%, #8e989c); box-shadow: 0 0 0 10px #0d1f1a, 0 0 40px #2ee6a055; }
+  .brain::before, .brain::after { content:""; position:absolute; top:30px; width:11px; height:34px; border-radius:6px; background:#0b0f10; transform:rotate(-20deg); }
+  .brain::before { left:36px; } .brain::after { left:58px; }
+  .brain-l { position:absolute; left:50%; top:calc(50% + 78px); transform:translateX(-50%); font-family:var(--mono); font-size:12px; white-space:nowrap; }
+  .ring { position:absolute; left:50%; top:50%; width:150px; height:150px; margin:-75px; border-radius:50%; border:2px solid transparent;
+          border-top-color: var(--green); border-right-color: #2ee6a055; animation: spin 3s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .grid3 { display:grid; grid-template-columns: 1fr 1.3fr 1fr; gap:10px; }
+  .feed { font-family:var(--mono); font-size:10.5px; line-height:1.55; max-height:190px; overflow:auto; }
+  .feed div { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; } .feed em { color:var(--dim); font-style:normal; margin-right:6px; }
+  table { width:100%; border-collapse:collapse; font-family:var(--mono); font-size:10.5px; } td { padding:3px 2px; border-bottom:1px solid #0f201b; }
+  .empty { color:var(--dim); font-size:11px; font-family:var(--mono); padding:8px 0; }
+  .live { color:var(--green); } .live::before { content:"● "; }
+  @media (max-width: 700px) {
+    .grid3 { grid-template-columns: 1fr; }
+    .head { flex-direction: column; } .bal { text-align: left; }
+    h1 { font-size:18px; } .bal div { font-size:28px; }
+    #hub { height: 560px; }
+    .node { min-width: 0; max-width: 122px; padding:4px 6px 4px 5px; gap:5px; } .node span { max-width: 88px; }
+    .node b { font-size: 10px; } .node .ic { width:18px; height:18px; font-size:10px; }
+    .brain { width:62px; height:62px; box-shadow: 0 0 0 6px #0d1f1a, 0 0 30px #2ee6a055; }
+    .brain::before { left:20px; top:16px; width:7px; height:22px; } .brain::after { left:33px; top:16px; width:7px; height:22px; }
+    .ring { width:88px; height:88px; margin:-44px; } .brain-l { top: calc(50% + 48px); font-size: 11px; }
+    .closed { top: 54px; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap" id="app"></div>
+<script>
+const D = __DATA__;
+const $ = (h) => { const t = document.createElement("template"); t.innerHTML = h.trim(); return t.content.firstChild; };
+const money = v => (v < 0 ? "−$" : "$") + Math.abs(v).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+const ago = s => { const m = Math.max(0, (Date.now() / 1000 - s) / 60); return m < 60 ? `${m | 0}m` : m < 1440 ? `${(m / 60) | 0}h` : `${(m / 1440) | 0}d`; };
+const hhmm = s => new Date(s * 1000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+const app = document.getElementById("app");
+const S = D.summary;
+
+// ---------------- koka
+const elapsed = Date.now() / 1000 - D.started;
+const dd = String((elapsed / 86400) | 0), hh = String(((elapsed % 86400) / 3600) | 0).padStart(2, "0"), mm = String(((elapsed % 3600) / 60) | 0).padStart(2, "0");
+app.append($(`<div class="card head">
+  <div class="title"><div class="logo"><i></i></div><div>
+    <h1>Ekipi i Botëve <b>Demo</b></h1>
+    <div class="sub"><span class="live"></span>${dd}d ${hh}:${mm} · ${D.tf} · MEXC · para virtuale · pa duar</div>
+  </div></div>
+  <div class="bal"><small>KAPITALI</small><div class="${S.pnl < 0 ? "neg" : ""}">${money(S.equity)}</div>
+    <span>${S.multiple.toFixed(3)}× nga ${money(S.start)} · ${S.trades} tregti · ${S.wins}W/${S.losses}L</span></div>
+</div>`));
+
+// ---------------- monedhat + shiriti i tregtive
+const chips = $(`<div class="card" style="padding:8px"><div class="chips"></div><div class="bars" style="margin-top:8px"></div></div>`);
+const COLORS = ["#2ee6a0", "#b57bff", "#4dc3ff", "#ffcf5a", "#ff7ab6", "#4dffd8", "#ff9a4d", "#9dff4d"];
+D.chips.forEach((c, i) => chips.querySelector(".chips").append($(`<div class="chip ${c.on ? "on" : ""}">
+  <span class="d" style="background:${COLORS[i % COLORS.length]}">${c.pair[0]}</span>${c.pair.replace("/USDT", "")}
+  <span class="${c.chg >= 0 ? "up" : "down"}">${c.chg >= 0 ? "+" : ""}${c.chg.toFixed(1)}%</span></div>`)));
+const bars = chips.querySelector(".bars"), last = D.closed.slice(-60);
+for (let i = 0; i < 60; i++) { const t = last[i - (60 - last.length)]; bars.append($(`<i class="${t ? (t.pnl > 0 ? "w" : "l") : ""}"></i>`)); }
+app.append(chips);
+
+// ---------------- grafiku i kapitalit (qirinj nga pikat e kapitalit)
+const eqCard = $(`<div class="card"><div class="label"><span>KAPITALI I BOTËVE · ${D.tf}</span>
+  <span>${S.open} të hapura · ${S.orders} urdhra</span></div><canvas id="eq" height="220"></canvas></div>`);
+app.append(eqCard);
+if (D.lastClosed) {
+  const c = D.lastClosed;
+  eqCard.append($(`<div class="closed ${c.pnl < 0 ? "neg" : ""}"><div class="t"><b>MBYLLUR</b>${c.pair} · ${c.why}</div>
+    <div class="v ${c.pnl < 0 ? "down" : "up"}">${c.pnl < 0 ? "−" : "+"}$${Math.abs(c.pnl).toFixed(2)} <span style="font-size:11px">${c.r >= 0 ? "+" : ""}${c.r.toFixed(2)}R</span></div></div>`));
+}
+function drawEquity() {
+  const cv = document.getElementById("eq"), dpr = devicePixelRatio || 1, W = cv.clientWidth, H = 220;
+  cv.width = W * dpr; cv.height = H * dpr; const g = cv.getContext("2d"); g.scale(dpr, dpr);
+  const pts = D.equity.length > 1 ? D.equity : [[D.started, S.start], [Date.now() / 1000, S.equity]];
+  const N = Math.min(48, pts.length), per = Math.ceil(pts.length / N), candles = [];
+  for (let i = 0; i < pts.length; i += per) {
+    const s = pts.slice(Math.max(0, i - 1), i + per).map(p => p[1]);
+    candles.push({ o: s[0], c: s[s.length - 1], h: Math.max(...s), l: Math.min(...s) });
+  }
+  const vals = candles.flatMap(c => [c.h, c.l]).concat([S.start]);
+  let lo = Math.min(...vals), hi = Math.max(...vals); const pad = (hi - lo) * 0.15 || S.start * 0.01; lo -= pad; hi += pad;
+  const R = 62, y = v => 12 + (H - 34) * (1 - (v - lo) / (hi - lo)), cw = (W - R - 8) / candles.length;
+  g.font = "10px ui-monospace, Consolas, monospace"; g.fillStyle = "#5f8a7d"; g.strokeStyle = "#0f201b";
+  for (let k = 0; k <= 4; k++) { const v = lo + (hi - lo) * k / 4, yy = y(v); g.beginPath(); g.moveTo(0, yy); g.lineTo(W - R, yy); g.stroke(); g.fillText(money(v), W - R + 6, yy + 3); }
+  g.setLineDash([4, 4]); g.strokeStyle = "#5f8a7d88"; g.beginPath(); g.moveTo(0, y(S.start)); g.lineTo(W - R, y(S.start)); g.stroke(); g.setLineDash([]);
+  candles.forEach((c, i) => {
+    const x = 4 + i * cw + cw / 2, col = c.c >= c.o ? "#2ee6a0" : "#ff4d6a";
+    g.strokeStyle = g.fillStyle = col; g.beginPath(); g.moveTo(x, y(c.h)); g.lineTo(x, y(c.l)); g.stroke();
+    const top = y(Math.max(c.o, c.c)), bh = Math.max(1.5, Math.abs(y(c.o) - y(c.c))); g.fillRect(x - cw * 0.32, top, cw * 0.64, bh);
+  });
+  const yl = y(S.equity); g.fillStyle = S.pnl < 0 ? "#ff4d6a" : "#2ee6a0"; g.fillRect(W - R + 2, yl - 9, R - 4, 18);
+  g.fillStyle = "#04080a"; g.font = "bold 10px ui-monospace, Consolas, monospace"; g.fillText(money(S.equity), W - R + 6, yl + 4);
+}
+
+// ---------------- rrjeti i agjentëve rreth trurit
+const hub = $(`<div class="card"><div class="label"><span>${D.agents.length} AGJENTË → NJË TRU · SINJALE NGA SKANIMI I FUNDIT</span>
+  <span class="live">${D.agents.length}/${D.agents.length} online</span></div><div id="hub"><canvas></canvas><div class="ring"></div><div class="brain"></div>
+  <div class="brain-l"><b>TRURI</b> · ${D.brain}</div></div></div>`);
+app.append(hub);
+const hubEl = hub.querySelector("#hub");
+const nodes = D.agents.map(a => { const n = $(`<div class="node ${a.state}" style="color:${a.color}">
+  <div class="ic" style="background:${a.color}">${a.icon}</div><div><b style="color:${a.color}">${a.name.toUpperCase()}</b><span>${a.stat}</span></div></div>`);
+  hubEl.append(n); return n; });
+function layoutHub() {
+  const W = hubEl.clientWidth, H = hubEl.clientHeight, cv = hubEl.querySelector("canvas"), dpr = devicePixelRatio || 1;
+  cv.width = W * dpr; cv.height = H * dpr; cv.style.width = W + "px"; const g = cv.getContext("2d"); g.scale(dpr, dpr);
+  const narrow = W < 560, n = nodes.length;
+  const rx = narrow ? W / 2 - 64 : Math.min(W / 2 - 95, 340), ry = H / 2 - (narrow ? 26 : 30);
+  nodes.forEach((el, i) => {
+    const a = -Math.PI / 2 + (2 * Math.PI * i) / n, x = W / 2 + Math.cos(a) * rx, y = H / 2 + Math.sin(a) * ry;
+    el.style.left = x + "px"; el.style.top = y + "px";
+    const on = D.agents[i].state === "on";
+    g.strokeStyle = on ? D.agents[i].color : "#12302a"; g.globalAlpha = on ? 0.8 : 1; g.lineWidth = on ? 1.6 : 1;
+    g.beginPath(); g.moveTo(W / 2, H / 2); g.lineTo(x, y); g.stroke(); g.globalAlpha = 1;
+  });
+}
+
+// ---------------- poshtë: ngjarjet, pozicionet, fitimi
+const bottom = $(`<div class="grid3">
+  <div class="card"><div class="label"><span>POZICIONET DEMO</span><span>${S.open}</span></div><div id="pos"></div></div>
+  <div class="card"><div class="label"><span>NGJARJET</span><span class="live">live</span></div><div class="feed" id="feed"></div></div>
+  <div class="card"><div class="label"><span>FITIMI I TREGTIVE TË MBYLLURA</span><span>${money(D.closed.reduce((s, c) => s + c.pnl, 0))}</span></div><canvas id="pnl" height="150"></canvas></div>
+</div>`);
+app.append(bottom);
+const pos = bottom.querySelector("#pos");
+if (!D.positions.length && !D.orders.length) pos.append($(`<div class="empty">Asnjë pozicion. Botët presin një setup.</div>`));
+else {
+  const t = $(`<table></table>`);
+  D.positions.forEach(p => t.append($(`<tr><td>${p.pair.replace("/USDT", "")}</td><td class="${p.side > 0 ? "up" : "down"}">${p.side > 0 ? "LONG" : "SHORT"}</td>
+    <td>${p.entry}</td><td class="${p.upnl >= 0 ? "up" : "down"}">${p.upnl >= 0 ? "+" : "−"}$${Math.abs(p.upnl).toFixed(2)}</td></tr>`)));
+  D.orders.forEach(o => t.append($(`<tr><td>${o.pair.replace("/USDT", "")}</td><td style="color:var(--gold)">LIMIT</td><td>${o.entry}</td><td style="color:var(--dim)">pret</td></tr>`)));
+  pos.append(t);
+}
+const feed = bottom.querySelector("#feed");
+if (!D.events.length) feed.append($(`<div class="empty">Ende asnjë ngjarje.</div>`));
+D.events.forEach(e => feed.append($(`<div title="${e[1].replace(/"/g, "&quot;")}"><em>${hhmm(e[0])}</em>${e[1].replace(/</g, "&lt;")}</div>`)));
+function drawPnl() {
+  const cv = document.getElementById("pnl"), dpr = devicePixelRatio || 1, W = cv.clientWidth, H = 150;
+  cv.width = W * dpr; cv.height = H * dpr; const g = cv.getContext("2d"); g.scale(dpr, dpr);
+  let acc = 0; const s = [0].concat(D.closed.map(c => (acc += c.pnl)));
+  if (s.length < 2) { g.fillStyle = "#5f8a7d"; g.font = "11px ui-monospace, Consolas, monospace"; g.fillText("Ende asnjë tregti e mbyllur.", 4, 20); return; }
+  const lo = Math.min(0, ...s), hi = Math.max(0, ...s) || 1, y = v => 8 + (H - 16) * (1 - (v - lo) / (hi - lo || 1)), x = i => (W - 4) * i / (s.length - 1) + 2;
+  g.strokeStyle = "#0f201b"; g.beginPath(); g.moveTo(0, y(0)); g.lineTo(W, y(0)); g.stroke();
+  g.strokeStyle = acc >= 0 ? "#2ee6a0" : "#ff4d6a"; g.lineWidth = 2; g.beginPath(); s.forEach((v, i) => i ? g.lineTo(x(i), y(v)) : g.moveTo(x(i), y(v))); g.stroke();
+}
+
+const draw = () => { drawEquity(); layoutHub(); drawPnl(); };
+draw(); addEventListener("resize", draw);
+if (window.ResizeObserver) new ResizeObserver(draw).observe(app);
+</script>
+</body>
+</html>

@@ -157,3 +157,65 @@ def test_chain_reports_network_errors():
         raise OSError("no network")
     res = run_chain("BTC/USDT", "1h", fetch=boom)
     assert res.steps[0].status == "error" and "no network" in res.steps[0].output
+
+
+# ---------------------------------------------------------------- tregtia demo
+from types import SimpleNamespace
+
+from bots import paper
+from bots.chain import Step
+
+
+def bars(rows, start="2026-01-01"):
+    """rows: (open, high, low, close) për çdo orë."""
+    idx = pd.date_range(start, periods=len(rows), freq="h", tz="UTC")
+    return pd.DataFrame(rows, columns=["open", "high", "low", "close"], index=idx).assign(volume=100.0)
+
+
+def demo_signal(df, entry=100.0, stop=98.0, target=106.0):
+    s = Setup("Long", 99.5, 100.5, entry, stop, target, 108.0, atr=1.0, score=3, tools=[], leg=(90, 106))
+    return SimpleNamespace(setup=s, chart=Chart("BTC/USDT", "1h", df), pair="BTC/USDT", timeframe="1h",
+                           steps=[Step("Chart Feeder", "passed"), Step("Math Geometry", "passed")])
+
+
+def test_demo_order_fills_and_hits_target():
+    st = paper.new_state("geometry")
+    df0 = bars([(101, 102, 100.8, 101.5)])
+    assert paper.consider(st, demo_signal(df0)) and len(st["orders"]) == 1
+    assert not paper.consider(st, demo_signal(df0))                       # pa dyfishim
+    df = bars([(101, 102, 100.8, 101.5), (101, 101.2, 99.8, 100.4), (100.5, 104, 100.2, 103.5), (103.5, 106.4, 103, 106)])
+    paper.update(st, "BTC/USDT", "1h", df)
+    assert not st["orders"] and not st["positions"] and len(st["closed"]) == 1
+    c = st["closed"][0]
+    assert c["why"] == "Target 1" and c["pnl"] > 0 and 2.8 < c["r"] < 3.0     # 3R minus kostot
+    assert st["cash"] == pytest.approx(1000 + c["pnl"])
+    # Size Calc: rrezik 1% (10$) do të ishin 5 monedha ($500), por kufiri 33% e kapitalit e ul në 3.3
+    assert c["pnl"] == pytest.approx(3.3 * 6 - 3.3 * (100 + 106) * 0.00075)
+
+
+def test_demo_breakeven_then_stop_at_entry():
+    st = paper.new_state()
+    df0 = bars([(101, 102, 100.8, 101.5)])
+    paper.consider(st, demo_signal(df0))
+    df = bars([(101, 102, 100.8, 101.5), (100.5, 100.6, 99.9, 100.2), (100.2, 103.2, 100.1, 103), (103, 103, 99.5, 99.7)])
+    paper.update(st, "BTC/USDT", "1h", df)
+    c = st["closed"][0]
+    assert c["why"] == "breakeven" and c["exit"] == 100.0 and c["pnl"] < 0   # vetëm kostot
+
+
+def test_demo_order_expires_and_sniper_level():
+    st = paper.new_state()
+    df0 = bars([(101, 102, 100.8, 101.5)])
+    paper.consider(st, demo_signal(df0))
+    rows = [(101, 102, 100.8, 101.5)] + [(102, 103, 101.5, 102)] * 20
+    paper.update(st, "BTC/USDT", "1h", bars(rows))
+    assert not st["orders"] and not st["positions"] and "skadoi" in st["events"][-1][1]
+    st = paper.new_state("sniper")
+    assert not paper.consider(st, demo_signal(df0))                      # Sniper nuk e kaloi
+
+
+def test_demo_state_roundtrip(tmp_path):
+    st = paper.new_state()
+    paper.save(st, tmp_path / "p.json")
+    assert paper.load(tmp_path / "p.json") == st
+    assert paper.summary(st)["equity"] == 1000.0

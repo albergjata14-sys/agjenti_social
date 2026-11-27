@@ -10,7 +10,7 @@ from bots import ALL_BOTS, get_bot
 
 
 def _scan(args):
-    from bots.chain import scan
+    from bots import paper
     from bots.chart_feeder.logic import top_pairs
 
     while True:
@@ -23,7 +23,12 @@ def _scan(args):
             if r.alert:
                 print("    " + r.alert.replace("\n", "\n    ") + ("" if r.new_alert else "\n    (i dërguar më parë)"))
 
-        scan(pairs, args.tf, on_result=show)
+        _, state = paper.cycle(pairs, args.tf, on_result=show)
+        s = paper.summary(state)
+        print(f"  Demo: ${s['equity']:,.2f} ({s['multiple']:.3f}×) · {s['trades']} tregti {s['wins']}W/{s['losses']}L · "
+              f"{s['open']} të hapura · {s['orders']} urdhra")
+        for t, text in state["events"][-5:]:
+            print(f"    {time.strftime('%m-%d %H:%M', time.localtime(t))} {text}")
         if not args.cdo:
             break
         time.sleep(args.cdo * 60)
