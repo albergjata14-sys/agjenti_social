@@ -5,7 +5,7 @@
 <style>
   html, body { margin: 0; height: 100%; background: #05070f; overflow: hidden; font-family: "Segoe UI", system-ui, sans-serif; }
   #wrap { position: relative; width: 100%; height: 100%; }
-  canvas { display: block; }
+  canvas { display: block; touch-action: pan-y; }   /* në telefon: rrëshqitja lart-poshtë lëviz faqen, anash rrotullon */
   .tag { position: absolute; transform: translate(-50%, 0); text-align: center; pointer-events: none; white-space: nowrap; }
   .tag b { display: block; color: #e8eefc; font-size: 13px; letter-spacing: .3px; text-shadow: 0 0 8px #000; }
   .tag span { display: inline-block; margin-top: 3px; padding: 1px 8px; border-radius: 9px; font-size: 11px; color: #05070f; font-weight: 600; }
@@ -13,7 +13,7 @@
 </style>
 </head>
 <body>
-<div id="wrap"><div id="hint">tërhiq me miun për ta rrotulluar</div></div>
+<div id="wrap"><div id="hint">tërhiq për ta rrotulluar</div></div>
 <script>__THREE__</script>
 <script>
 const STATE = __STATE__;   // [{name, status}] status: idle | running | passed | rejected | alert | error
@@ -49,7 +49,12 @@ grid.position.y = 0.01; scene.add(grid);
 // Robotët në hark
 const N = STATE.length, R = 8.5, ARC = Math.PI * 0.95;
 const robots = [], tags = [];
-const pos = i => { const a = -ARC / 2 + ARC * i / (N - 1); return new THREE.Vector3(Math.sin(a) * R, 0, -Math.cos(a) * R + R * 0.55); };
+// Në telefon (ekran i ngushtë) robotët rreshtohen zigzag drejt thellësisë; në kompjuter, në hark.
+const NARROW = W() / H() < 1.1;
+const pos = i => {
+  if (NARROW) return new THREE.Vector3(i % 2 ? 2.4 : -2.4, 0, 5 - i * 2.7);
+  const a = -ARC / 2 + ARC * i / (N - 1); return new THREE.Vector3(Math.sin(a) * R, 0, -Math.cos(a) * R + R * 0.55);
+};
 
 function makeRobot(i, st) {
   const g = new THREE.Group();
@@ -113,8 +118,8 @@ for (let i = 0; i < N - 1; i++) {
 }
 
 // Kamera me rrotullim nga miu / gishti
-let yaw = 0, pitch = 0.36, dist = 17, drag = null, idleT = 0;
-const target = new THREE.Vector3(0, 1.6, 2.2);
+let yaw = 0, pitch = NARROW ? 0.6 : 0.36, dist = NARROW ? 23 : 17, drag = null, idleT = 0;
+const target = NARROW ? new THREE.Vector3(0, 0.3, -2.2) : new THREE.Vector3(0, 1.6, 2.2);
 renderer.domElement.addEventListener("pointerdown", e => { drag = { x: e.clientX, y: e.clientY }; idleT = 0; });
 addEventListener("pointerup", () => drag = null);
 addEventListener("pointermove", e => {
@@ -124,13 +129,15 @@ addEventListener("pointermove", e => {
 });
 renderer.domElement.addEventListener("wheel", e => { e.preventDefault(); dist = Math.min(32, Math.max(11, dist + e.deltaY * 0.01)); }, { passive: false });
 
-addEventListener("resize", () => { renderer.setSize(W(), H()); camera.aspect = W() / H(); camera.updateProjectionMatrix(); });
+const fit = () => { renderer.setSize(W(), H()); camera.aspect = W() / H(); camera.updateProjectionMatrix(); };
+addEventListener("resize", fit);
+if (window.ResizeObserver) new ResizeObserver(fit).observe(wrap);   // iframe-i merr lartësinë e plotë pak më vonë
 
 const clock = new THREE.Clock(), v = new THREE.Vector3();
 (function loop() {
   const t = clock.getElapsedTime(), dt = clock.getDelta();
   if (!drag) { idleT += 1 / 60; if (idleT > 3) yaw += Math.sin(t * 0.15) * 0.0012; }
-  const d = dist * Math.max(1, 2.1 / camera.aspect);   // në ekrane të ngushta kamera largohet, që të shihen të 6
+  const d = dist * Math.max(1, (NARROW ? 0.75 : 2.1) / camera.aspect);   // në ekrane të ngushta kamera largohet, që të shihen të 6
   camera.position.set(target.x + Math.sin(yaw) * Math.cos(pitch) * d, target.y + Math.sin(pitch) * d,
                       target.z + Math.cos(yaw) * Math.cos(pitch) * d);
   camera.lookAt(target);
