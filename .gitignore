@@ -21,3 +21,5 @@ crypto_bot_*.log
 .venv/
 venv/
 rezerve_*/
+bots_anthropic_key.json
+.venv-bots/

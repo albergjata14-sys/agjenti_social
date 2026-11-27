@@ -2,6 +2,15 @@
 
 Aplikacion Streamlit (`streamlit run app.py`) me agjentët e Smart Albania dhe **robotin e kriptove**.
 
+## 🤖 Ekipi i 6 botëve (`bots/`, `bots_app.py`)
+
+Më vete nga roboti i kriptove. Në Windows: dopio-klik te `start_bots.bat` → `http://localhost:8520`
+(ose `streamlit run bots_app.py`). Ngarkon screenshot-in e grafikut dhe ai kalon me radhë:
+Chart Feeder → Math Geometry → Backtester → Signal Cleaner → Sniper → Alert Manager. Secili bot është një thirrje
+e veçantë te Claude (`claude-opus-5-5`) me promptin e vet (`bots/<emri>/prompt.md`); zinxhiri ndalet te boti i parë
+që refuzon. Pamja 3D tregon cili bot po punon, cili e kaloi dhe ku u ndal. Çelësi i Anthropic API vendoset te
+⚙️ Rregullime (ruhet te `bots_anthropic_key.json`, jashtë git-it) ose si `ANTHROPIC_API_KEY`.
+
 ## 📈 Roboti i kriptove (`crypto_bot/`)
 
 Analizon grafikun e Bitcoin-it (ose të çdo monedhe), jep sinjal dhe parashikim të detajuar, skanon
