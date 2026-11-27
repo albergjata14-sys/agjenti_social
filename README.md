@@ -4,12 +4,19 @@ Aplikacion Streamlit (`streamlit run app.py`) me agjentët e Smart Albania dhe *
 
 ## 🤖 Ekipi i 6 botëve (`bots/`, `bots_app.py`)
 
-Më vete nga roboti i kriptove. Në Windows: dopio-klik te `start_bots.bat` → `http://localhost:8520`
-(ose `streamlit run bots_app.py`). Ngarkon screenshot-in e grafikut dhe ai kalon me radhë:
-Chart Feeder → Math Geometry → Backtester → Signal Cleaner → Sniper → Alert Manager. Secili bot është një thirrje
-e veçantë te Claude (`claude-opus-5-5`) me promptin e vet (`bots/<emri>/prompt.md`); zinxhiri ndalet te boti i parë
-që refuzon. Pamja 3D tregon cili bot po punon, cili e kaloi dhe ku u ndal. Çelësi i Anthropic API vendoset te
-⚙️ Rregullime (ruhet te `bots_anthropic_key.json`, jashtë git-it) ose si `ANTHROPIC_API_KEY`.
+Më vete nga roboti i kriptove, falas dhe pa asnjë API të AI-së. Në Windows: dopio-klik te `start_bots.bat` →
+`http://localhost:8520` (ose `streamlit run bots_app.py`). Shtyp "Skano tani" ose ndiz skanimin automatik:
+Chart Feeder merr vetë grafikët nga MEXC (spot) dhe secila monedhë kalon me radhë
+Chart Feeder → Math Geometry → Backtester → Signal Cleaner → Sniper → Alert Manager.
+Çdo bot zbaton me kod rregullat e promptit të vet (`bots/<emri>/prompt.md` → `bots/<emri>/logic.py`);
+zinxhiri ndalet te boti i parë që refuzon. Pamja 3D tregon ku arriti secila monedhë.
+
+```bash
+python -m bots skano --top 10 --tf 4h            # një skanim i 10 monedhave më të tregtuara
+python -m bots skano --pairs BTC/USDT ETH/USDT --tf 1h --cdo 30   # pa u ndalur, çdo 30 minuta
+```
+
+Alarmet ruhen te `bots_alerts.jsonl` (jashtë git-it) dhe i njëjti sinjal nuk përsëritet brenda 24 orësh.
 
 ## 📈 Roboti i kriptove (`crypto_bot/`)
 
