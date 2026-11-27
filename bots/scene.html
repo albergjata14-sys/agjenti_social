@@ -118,8 +118,8 @@ for (let i = 0; i < N - 1; i++) {
 }
 
 // Kamera me rrotullim nga miu / gishti
-let yaw = 0, pitch = NARROW ? 0.6 : 0.36, dist = NARROW ? 23 : 17, drag = null, idleT = 0;
-const target = NARROW ? new THREE.Vector3(0, 0.3, -2.2) : new THREE.Vector3(0, 1.6, 2.2);
+let yaw = 0, pitch = NARROW ? 0.78 : 0.36, dist = NARROW ? 24 : 17, drag = null, idleT = 0;
+const target = NARROW ? new THREE.Vector3(0, 0.6, -1.8) : new THREE.Vector3(0, 1.6, 2.2);
 renderer.domElement.addEventListener("pointerdown", e => { drag = { x: e.clientX, y: e.clientY }; idleT = 0; });
 addEventListener("pointerup", () => drag = null);
 addEventListener("pointermove", e => {
@@ -137,7 +137,7 @@ const clock = new THREE.Clock(), v = new THREE.Vector3();
 (function loop() {
   const t = clock.getElapsedTime(), dt = clock.getDelta();
   if (!drag) { idleT += 1 / 60; if (idleT > 3) yaw += Math.sin(t * 0.15) * 0.0012; }
-  const d = dist * Math.max(1, (NARROW ? 0.75 : 2.1) / camera.aspect);   // në ekrane të ngushta kamera largohet, që të shihen të 6
+  const d = dist * Math.max(1, (NARROW ? 0.8 : 2.1) / camera.aspect);   // në ekrane të ngushta kamera largohet, që të shihen të 6
   camera.position.set(target.x + Math.sin(yaw) * Math.cos(pitch) * d, target.y + Math.sin(pitch) * d,
                       target.z + Math.cos(yaw) * Math.cos(pitch) * d);
   camera.lookAt(target);

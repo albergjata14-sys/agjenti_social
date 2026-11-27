@@ -17,6 +17,11 @@ python -m bots skano --top 10 --tf 4h            # një skanim i 10 monedhave m�
 python -m bots skano --pairs BTC/USDT ETH/USDT --tf 1h --cdo 30   # pa u ndalur, çdo 30 minuta
 ```
 
+**Tregtia demo:** me çdo skanim botët hapin dhe mbyllin vetë tregti me $1,000 virtuale mbi çmimet reale të MEXC
+(hyrje sipas nivelit të zgjedhur: Math Geometry Strong+ ose vetëm SNIPER SIGNAL; Size Calc: rrezik 1%, max 33% për
+pozicion, pa levë; Exit Manager: stop, Target 1, breakeven pas +1.5R; kosto 0.075% për anë). Paneli "📊 Paneli" tregon
+kapitalin, agjentët rreth "trurit", pozicionet dhe ngjarjet. Gjendja ruhet te `bots_paper.json`.
+
 Alarmet ruhen te `bots_alerts.jsonl` (jashtë git-it) dhe i njëjti sinjal nuk përsëritet brenda 24 orësh.
 
 ## 📈 Roboti i kriptove (`crypto_bot/`)

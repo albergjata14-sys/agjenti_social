@@ -28,6 +28,7 @@ class ChainResult:
     timeframe: str
     steps: list = field(default_factory=list)
     setup: object = None
+    chart: object = None       # grafiku që solli Chart Feeder (për tregtinë demo)
     new_alert: bool = False
 
     @property
@@ -68,6 +69,7 @@ def run_chain(pair, timeframe, candles=3000, fetch=fetch_candles, on_step=None, 
         step(0, "error", f"{type(exc).__name__}: {exc}")
         return res
     res.pair = chart.pair
+    res.chart = chart
     if not step(0, "passed", msg):
         return res
 
