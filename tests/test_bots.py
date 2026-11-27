@@ -21,5 +21,5 @@ def test_get_bot_by_name():
 
 def test_ready_only_with_prompt():
     ready = {cls.name for cls in ALL_BOTS if cls().ready}
-    assert ready == {"Chart Feeder", "Math Geometry", "Backtester", "Signal Cleaner"}
+    assert ready == {"Chart Feeder", "Math Geometry", "Backtester", "Signal Cleaner", "Sniper"}
     assert get_bot("chart feeder").prompt.startswith("You are Chart Feeder.")
